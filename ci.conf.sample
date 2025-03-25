@@ -1,0 +1,12 @@
+#
+# This file contains a list of branches to be merged into 'baseline', one
+# per line in the following format
+#
+# <user> <git url> <branch>
+#
+# A 'baseline' entry is mandatory.
+#
+# Example:
+#
+#baseline git://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git master
+#john.doe http://git.linaro.org/people/john.doe/myfantasticrepo.git my-incredible-code

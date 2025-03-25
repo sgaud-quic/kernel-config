@@ -1,0 +1,9 @@
+This repo contains the configuration file used by the `automerge` tool to
+merge the various git topic branches and create a new integration branch
+`qcom-next`
+
+Please send patches to update the qcom-next.conf file as per your team
+needs.
+
+There is also a ci.conf.sample file if you want to create your own
+configuration file for local integration testing.
