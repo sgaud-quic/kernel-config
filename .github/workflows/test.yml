@@ -26,7 +26,6 @@ jobs:
         uses: qualcomm-linux/kernel-config/.github/actions/pull_docker_image@main
         with:
           image: ${{ inputs.docker_image }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Download URLs list
         uses: actions/download-artifact@v4
