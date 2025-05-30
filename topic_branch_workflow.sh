@@ -10,12 +10,12 @@ fi
 BRANCH_NAME=$1
 COMMIT_SHA=$2
 
-git clone https://github.com/qualcomm-linux/kernel-topics.git
+#git clone https://github.com/qualcomm-linux/kernel-topics.git
 
 echo "=== Checkout to topic branch ==="
 cd kernel-topics
 git checkout "$BRANCH_NAME" || exit 1
-CURRVER=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^SUBLEVEL =/ {s=$3} /^EXTRAVERSION =/ {e=$3} END {print v "." p "." s e}' Makefile)
+CURRVER=$(awk '/^VERSION =/ {v=$3} /^PATCHLEVEL =/ {p=$3} /^EXTRAVERSION =/ {e=$3} END {print v "." p e}' Makefile)
 TAG_NAME="${BRANCH_NAME}-${CURRVER}-$(date +%Y%m%d)"
 
 echo $TAG_NAME
