@@ -7,6 +7,40 @@ if [ "$#" -ne 2 ]; then
     exit 1
 fi
 
+if [ -d "kernel-topics" ]; then
+  echo "kernel-topics directory exists, Do you want to use same?"
+  echo "Do you want to delete it ? [Y/n] Delete by default.."
+  read RES
+  if [ "$RES" == "Y" -o "$RES" == "y" -o "$RES" == "" ]; then
+    echo "Deleting kernel-topics directory..."
+    rm -rf kernel-topics
+    echo "Syncing kernel-topics again..."
+    echo "Do you want to use https or ssh for git push ?"
+    read RES
+    if [ "$RES" == "ssh" -o "$RES" == "" ]; then
+      echo "Using ssh.."
+      git clone git@github.com:qualcomm-linux/kernel-topics.git
+    else
+      echo "Using https."
+      git clone https://github.com/qualcomm-linux/kernel-topics.git
+    fi
+  else
+    echo "Using existing kernel-topics directory..."
+  fi
+else
+   echo "Do you want to use https or ssh for git push ?"
+    read RES
+    if [ "$RES" == "ssh" -o "$RES" == "" ]; then
+      echo "Using ssh.."
+      git clone git@github.com:qualcomm-linux/kernel-topics.git
+    else
+      echo "Using https."
+      git clone https://github.com/qualcomm-linux/kernel-topics.git
+    fi
+fi
+
+REMOTE_NAME="torvalds"
+REMOTE_URL="https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git"
 BRANCH_NAME=$1
 COMMIT_SHA=$2
 
@@ -22,10 +56,18 @@ echo $TAG_NAME
 
 echo "=== Tagging the branch ==="
 git tag -a "$TAG_NAME" -m "$BRANCH_NAME Topic branch based on ${CURRVER}"
-git push origin "$TAG_NAME"
+git push origin "$TAG_NAME" -f
 
 echo "=== Resetting the branch ==="
-git remote add torvalds https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git 2>/dev/null
+echo "$REMOTE_NAME"
+echo "$REMOTE_URL"
+if ! git remote | grep -q "^${REMOTE_NAME}$"; then
+  git remote add "$REMOTE_NAME" "$REMOTE_URL"
+  echo "Remote '$REMOTE_NAME' added."
+else
+  echo "Remote '$REMOTE_NAME' already exists."
+fi
+
 git fetch torvalds
 git checkout main
 git branch -D "$BRANCH_NAME"
@@ -41,4 +83,3 @@ git commit -s -m "Github workflow for Topic Branch"
 
 echo "=== force push ==="
 git push origin "$BRANCH_NAME" -f
-
