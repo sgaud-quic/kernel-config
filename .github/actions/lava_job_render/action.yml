@@ -149,6 +149,6 @@ runs:
           -v "$(dirname "$PWD")":"$(dirname "$PWD")" \
           ${{ inputs.docker_image }} \
           sh -c 'export BOOT_METHOD=fastboot && \
-            export TARGET=qcs6490-rb3gen2 && \
+            export TARGET=qcs6490 && \
             export TARGET_DTB=qcs6490-rb3gen2 && \
             python3 lava_Job_definition_generator.py --localjson ./data/cloudData.json --qcom-next-ci-premerge'
