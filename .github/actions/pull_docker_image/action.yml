@@ -5,25 +5,15 @@ inputs:
   image:
     description: The docker image to pull
     required: true
-    default: kmake-image:latest
+    default: kmake-image:ver.1.0
 
 runs:
   using: "composite"
   steps:
-    - name: Clone kmake-image
+    - name: Pull Docker image
       shell: bash
       run: |
-        git clone https://github.com/qualcomm-linux/kmake-image.git
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-    
-    - name: Build and push
-      uses: docker/build-push-action@v6
-      with:
-        push: false
-        load: true
-        tags: kmake-image:latest
-        context: kmake-image
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        echo "Pulling Docker image: ${{ inputs.image }}"
+        docker pull artifacts.codelinaro.org/clo-420-qli-registry/${{ inputs.image }}
+        echo "Docker image pulled successfully:"
+        docker tag artifacts.codelinaro.org/clo-420-qli-registry/${{ inputs.image }} kmake-image:ver.1.0
