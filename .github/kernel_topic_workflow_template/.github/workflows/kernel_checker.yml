@@ -22,7 +22,7 @@ jobs:
     uses: qualcomm-linux/kernel-checkers/.github/workflows/checker.yml@main
     with:
       check_name: ${{ matrix.check }}
-      kernel_src: ${{ needs.prepare.outputs.kernel_src }}/kernel
+      kernel_src: ${{ needs.prepare.outputs.kernel_src }}
       base_sha: ${{ needs.prepare.outputs.base_sha }}
       head_sha: ${{ needs.prepare.outputs.head_sha }}
       base_branch: ${{ github.base_ref }}
