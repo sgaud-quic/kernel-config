@@ -19,8 +19,8 @@ jobs:
         run:  |
              echo Hello, world!
              cd ..
-             git clone https://github.com/sgaud-quic/automerge.git
-             git clone https://github.com/sgaud-quic/kernel-topics.git
+             # git clone https://github.com/sgaud-quic/automerge.git
+             # git clone https://github.com/sgaud-quic/kernel-topics.git
              cd kernel-topics
              ../automerge/ci-merge -f ../kernel-config/qcom-next.conf -t head -n -i qcom-next | tee ../merge.log
         
