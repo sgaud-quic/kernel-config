@@ -18,6 +18,7 @@ jobs:
       - name: Clone repositories
         run:  |
              echo Hello, world!
+             cd ..
              git clone https://github.com/sgaud-quic/automerge.git
              git clone https://github.com/sgaud-quic/kernel-topics.git
         
