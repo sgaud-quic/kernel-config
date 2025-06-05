@@ -16,7 +16,8 @@ jobs:
 
       # Runs a single command using the runners shell
       - name: Clone repositories
-        run: echo Hello, world!
+        run:  |
+             echo Hello, world!
              git clone https://github.com/sgaud-quic/automerge.git
              git clone https://github.com/sgaud-quic/kernel-topics.git
         
