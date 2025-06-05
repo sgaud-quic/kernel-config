@@ -21,6 +21,8 @@ jobs:
              cd ..
              git clone https://github.com/sgaud-quic/automerge.git
              git clone https://github.com/sgaud-quic/kernel-topics.git
+             cd kernel-topics
+             ../automerge/ci-merge -f ../kernel-config/qcom-next.conf -t head -n -i qcom-next | tee ../merge.log
         
       # Runs a set of commands using the runners shell
       - name: Run a multi-line script
