@@ -87,4 +87,4 @@ runs:
       with:
         name: presigned_urls.json
         path: ${{ github.workspace }}/presigned_urls.json
-        retention-days: 1
+        retention-days: 3
