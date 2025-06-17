@@ -13,6 +13,10 @@ inputs:
     description: Download file paths
     required: false
     default: ''
+  download_location:
+    description: file download location
+    required: false
+    default: .
   mode:
     description: Mode of operation (upload/download)
     required: true
@@ -73,7 +77,7 @@ runs:
           download)
             #Download The required file from s3
             echo "Downloading files from S3 bucket..."
-            aws s3 sync s3://${{ inputs.s3_bucket }}/${{ inputs.download_file }} .
+            aws s3 cp s3://${{ inputs.s3_bucket }}/${{ inputs.download_file }} ${{ inputs.download_location }}
             ;;
           *)
             echo "Invalid mode. Use 'upload' or 'download'."

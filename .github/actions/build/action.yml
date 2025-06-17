@@ -41,4 +41,3 @@ runs:
       run: |
         cd ${{ inputs.workspace_path }}
         (cd ../kobj/tar-install ; find lib/modules | cpio -o -H newc -R +0:+0 | gzip -9 >> ../../artifacts/ramdisk.gz)
-
