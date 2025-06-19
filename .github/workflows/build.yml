@@ -7,6 +7,11 @@ on:
         type: string
         required: true
 
+      build_matrix:
+        description: Build matrix for multi target builds
+        type: string
+        required: true
+
 jobs:
   build:
     runs-on:
@@ -47,8 +52,12 @@ jobs:
           echo "${{ github.workspace }}/modules.tar.xz" >> $workspace/../artifacts/file_list.txt
           echo "$workspace/../kobj/arch/arm64/boot/Image" >> $workspace/../artifacts/file_list.txt
           echo "$workspace/../kobj/vmlinux" >> $workspace/../artifacts/file_list.txt
-          echo "$workspace/../kobj/arch/arm64/boot/dts/qcom/qcs6490-rb3gen2.dtb" >> $workspace/../artifacts/file_list.txt
 
+          # Loop through all machines from the build_matrix input
+          machines='${{ inputs.build_matrix }}'
+          for machine in $(echo "$machines" | jq -r '.[].machine'); do
+            echo "$workspace/../kobj/arch/arm64/boot/dts/qcom/${machine}.dtb" >> $workspace/../artifacts/file_list.txt
+          done
 
       - name: Upload artifacts
         uses: qualcomm-linux/kernel-config/.github/actions/aws_s3_helper@main
