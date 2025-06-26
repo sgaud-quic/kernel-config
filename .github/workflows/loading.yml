@@ -13,18 +13,24 @@ on:
         description: Full Matrix containing lava description
         value: ${{ jobs.loading.outputs.full_matrix }}
 
+      bootbins:
+        description: Bootbins to generate Flat Build
+        value: ${{ jobs.loading.outputs.bootbins }}
+
 jobs:
   loading:
     runs-on: ubuntu-latest
     outputs:
       build_matrix: ${{ steps.loading.outputs.build_matrix }}
       full_matrix: ${{ steps.loading.outputs.full_matrix }}
+      bootbins: ${{ steps.loading.outputs.bootbins }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          repository: qualcomm-linux/kernel-config
+          repository: sgaud-quic/kernel-config
+          ref: flatbuild
 
       - name: Load Parameters
         id: loading
-        uses: qualcomm-linux/kernel-config/.github/actions/loading@main
+        uses: sgaud-quic/kernel-config/.github/actions/loading@flatbuild

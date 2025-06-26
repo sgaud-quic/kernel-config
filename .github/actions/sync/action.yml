@@ -4,7 +4,7 @@ inputs:
   base_branch:
     description: Base branch
     required: true
-    default: qcom-next-staging
+    default: qcom-next-staging-test
   pr_number:
     description: PR number
     required: false
@@ -25,7 +25,7 @@ runs:
         echo "Workspace cleaned successfully!"
 
     - name: Checkout PR branch
-      if: inputs.base_branch == 'qcom-next-staging'
+      if: inputs.base_branch == 'qcom-next-staging-test'
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
@@ -37,7 +37,7 @@ runs:
         git config --global user.email "github-actions@github.com"
 
     - name: Sync with latest changes
-      if: inputs.base_branch == 'qcom-next-staging'
+      if: inputs.base_branch == 'qcom-next-staging-test'
       shell: bash
       run: |
         set -e
@@ -46,14 +46,14 @@ runs:
         git merge --no-ff origin/${{ inputs.base_branch }}
 
     - name: Clone repositories
-      if: inputs.base_branch != 'qcom-next-staging'
+      if: inputs.base_branch != 'qcom-next-staging-test'
       shell: bash
       run: |
-        git clone https://github.com/qualcomm-linux/kernel.git
+        git clone https://github.com/sgaud-quic/kernel.git
         git clone https://github.com/qualcomm-linux/automerge.git
 
     - name: Create merge configuration
-      if: inputs.base_branch != 'qcom-next-staging'
+      if: inputs.base_branch != 'qcom-next-staging-test'
       shell: bash
       run: |
         TOPIC_BRANCH=${{ inputs.base_branch }}
@@ -65,14 +65,14 @@ runs:
 
     - name: Run auto merge
       id: automerge
-      if: inputs.base_branch != 'qcom-next-staging'
+      if: inputs.base_branch != 'qcom-next-staging-test'
       shell: bash
       run: |
         cd kernel
         ../automerge/ci-merge -f ../merge.conf -t head -n
 
     - name: Fetch PR
-      if: inputs.base_branch != 'qcom-next-staging'
+      if: inputs.base_branch != 'qcom-next-staging-test'
       shell: bash
       run: |
         cd kernel
@@ -84,7 +84,7 @@ runs:
       id: set-workspace
       shell: bash
       run: |
-        if [[ "${{ inputs.base_branch }}" == "qcom-next-staging" ]]; then
+        if [[ "${{ inputs.base_branch }}" == "qcom-next-staging-test" ]]; then
           echo "workspace=${{ github.workspace }}" >> "$GITHUB_OUTPUT"
         else
           echo "workspace=${{ github.workspace }}/kernel" >> "$GITHUB_OUTPUT"
