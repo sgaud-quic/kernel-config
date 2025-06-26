@@ -14,9 +14,7 @@ on:
 
 jobs:
   build:
-    runs-on:
-      group: GHA-Kernel-SelfHosted-RG
-      labels: [ self-hosted, kernel-prd-u2404-x64-large-od-ephem ]
+    runs-on: self-hosted
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -41,6 +39,48 @@ jobs:
         with:
           docker_image: ${{ inputs.docker_image }}
           workspace_path: ${{ steps.sync.outputs.workspace_path }}
+
+      - name: Generate Flat Build
+        run: |
+          workspace=${{ steps.sync.outputs.workspace_path }}
+          echo "$workspace"
+          mkdir -p $workspace/../flatbuild-rb3gen2
+          cd $workspace/../flatbuild-rb3gen2
+          wget http://hu-sgaud-hyd:8000/QCM6490_bootbinaries.zip
+          unzip QCM6490_bootbinaries.zip
+          git clone https://github.com/qualcomm-linux/qcom-ptool.git
+          python qcom-ptool/ptool.py -x QCM6490_bootbinaries/partition_ufs.xml -t QCM6490_bootbinaries/
+          cd QCM6490_bootbinaries/
+          rm -rf rawprogram0_* rawprogram1_* rawprogram2_* rawprogram3_* rawprogram4_* rawprogram5_*
+          sed -i '/system.img/d' rawprogram0.xml
+
+          mkdir -p $workspace/../flatbuild-rb3gen2/artifacts
+          cd $workspace/../flatbuild-rb3gen2/artifacts
+          wget http://hu-sgaud-hyd:8000/initramfs-kerneltest-full-image-qcom-armv8a.cpio.gz
+          wget http://hu-sgaud-hyd:8000/initramfs-firmware-rb3gen2-image-qcom-armv8a.cpio.gz
+          gunzip -c initramfs-kerneltest-full-image-qcom-armv8a.cpio.gz > initramfs-kerneltest-full-image-qcom-armv8a.cpio
+          gunzip -c initramfs-firmware-rb3gen2-image-qcom-armv8a.cpio.gz > initramfs-firmware-rb3gen2-image-qcom-armv8a.cpio
+          cat initramfs-kerneltest-full-image-qcom-armv8a.cpio initramfs-firmware-rb3gen2-image-qcom-armv8a.cpio > merged-initramfs-rb3gen2.cpio
+          gzip merged-initramfs-rb3gen2.cpio
+
+          (cd $workspace/../kobj/tar-install ; find lib/modules | cpio -o -H newc -R +0:+0 | gzip -9 >> $workspace/../flatbuild-rb3gen2/artifacts/merged-initramfs-rb3gen2.cpio)
+
+          wget -O $workspace/../flatbuild-rb3gen2/artifacts/systemd-boot-efi.deb http://ports.ubuntu.com/pool/universe/s/systemd/systemd-boot-efi_255.4-1ubuntu8_arm64.deb
+          dpkg-deb -xv $workspace/../flatbuild-rb3gen2/artifacts/systemd-boot-efi.deb $workspace/../flatbuild-rb3gen2/artifacts/systemd
+
+          CMDLINE="console=ttyMSM0,115200n8 earlycon qcom_geni_serial.con_enabled=1 kernel.sched_pelt_multiplier=4 mem_sleep_default=s2idle mitigations=auto video=efifb:off"
+          kmake-image-run generate_boot_bins.sh efi --ramdisk $workspace/../flatbuild-rb3gen2/artifacts/merged-initramfs-rb3gen2.cpio \ 
+            --systemd-boot $workspace/../flatbuild-rb3gen2/artifacts/systemd/usr/lib/systemd/boot/efi/systemd-bootaa64.efi \ 
+            --stub $workspace/../flatbuild-rb3gen2/artifacts/systemd/usr/lib/systemd/boot/efi/linuxaa64.efi.stub \ 
+            --linux $workspace/../kobj/arch/arm64/boot/Image \ 
+            --cmdline "${CMDLINE}" \ 
+            --output $workspace/../flatbuild-rb3gen2/images
+
+          kmake-image-run generate_boot_bins.sh dtb --input $workspace/../kobj/arch/arm64/boot/dts/qcom/qcs6490-rb3gen2.dtb \ 
+            --output $workspace/../flatbuild-rb3gen2/images
+
+          cp $workspace/../flatbuild-rb3gen2/images/efi.bin $workspace/../flatbuild-rb3gen2/QCM6490_bootbinaries
+          cp $workspace/../flatbuild-rb3gen2/images/dtb.bin $workspace/../flatbuild-rb3gen2/QCM6490_bootbinaries
 
       - name: Create file list for artifacts upload
         run: |

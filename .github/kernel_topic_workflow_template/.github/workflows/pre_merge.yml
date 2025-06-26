@@ -4,5 +4,5 @@ on:
 
 jobs:
   pre-merge:
-    uses: qualcomm-linux/kernel-config/.github/workflows/pre_merge.yml@main
+    uses: sgaud-quic/kernel-config/.github/workflows/pre_merge.yml@flatbuild
     secrets: inherit

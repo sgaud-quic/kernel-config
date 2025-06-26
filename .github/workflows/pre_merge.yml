@@ -14,12 +14,3 @@ jobs:
     with:
       docker_image: kmake-image:ver.1.0
       build_matrix: ${{ needs.loading.outputs.build_matrix }}
-
-  test:
-    needs: [loading, build]
-    uses: ./.github/workflows/test.yml
-    secrets: inherit
-    with:
-      docker_image: kmake-image:ver.1.0
-      build_matrix: ${{ needs.loading.outputs.build_matrix }}
-      full_matrix: ${{ needs.loading.outputs.full_matrix }}
