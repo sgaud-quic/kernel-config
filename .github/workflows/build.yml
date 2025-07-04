@@ -69,8 +69,11 @@ jobs:
             mkdir -p $workspace/../flatbuild-"$platform"
             cd $workspace/../flatbuild-"$platform"
             wget https://artifactory-las.qualcomm.com/artifactory/lint-lv-local/k2c_nhlos_fw/$buildid/common/build/ufs/bin/"$platform"_bootbinaries.zip
+            wget https://artifactory-las.qualcomm.com/artifactory/lint-lv-local/k2c_nhlos_fw/$buildid/common/build/ufs/bin/contents.zip
             unzip "$platform"_bootbinaries.zip
+            unzip contents.zip
             python $workspace/../qcom-ptool/ptool.py -x "$platform"_bootbinaries/partition_ufs.xml -t "$platform"_bootbinaries/
+            cp $workspace/../flatbuild-"$platform"/contents/contents.xml "$platform"_bootbinaries/
             cd $workspace/../flatbuild-"$platform"/"$platform"_bootbinaries/
             rm -rf rawprogram0_* rawprogram1_* rawprogram2_* rawprogram3_* rawprogram4_* rawprogram5_*
             sed -i '/system.img/d' rawprogram0.xml
