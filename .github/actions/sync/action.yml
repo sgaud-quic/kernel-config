@@ -80,6 +80,19 @@ runs:
         git merge pr-${{inputs.pr_number}} --no-commit
         git commit -m "Merged PR ${{inputs.pr_number}}"
 
+    - name: Fetch PR
+      if: inputs.base_branch == 'qcom-next-staging'
+      shell: bash
+      run: |
+        git checkout ${{ inputs.base_branch }}
+        git fetch https://github.com/qualcomm-linux/kernel.git pull/${{inputs.pr_number}}/head:pr-${{inputs.pr_number}}
+        git merge pr-${{ inputs.pr_number }} --no-commit || echo "Merge already applied or fast-forwarded"
+        if ! git diff --cached --quiet; then
+          git commit -m "Merged PR #${{ inputs.pr_number }}"
+        else
+          echo "Nothing to commit. PR may already be merged or fast-forwarded."
+        fi
+
     - name: Set workspace path
       id: set-workspace
       shell: bash
