@@ -29,8 +29,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: sgaud-quic/kernel-config
-          ref: flatbuild
+          ref: flatbuild_working
 
       - name: Load Parameters
         id: loading
-        uses: sgaud-quic/kernel-config/.github/actions/loading@flatbuild
+        uses: sgaud-quic/kernel-config/.github/actions/loading@flatbuild_working
