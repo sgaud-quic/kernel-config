@@ -15,10 +15,10 @@ jobs:
       docker_image: kmake-image:ver.1.0
       build_matrix: ${{ needs.loading.outputs.build_matrix }}
       bootbins: ${{ needs.loading.outputs.bootbins }}
-
+  
   test:
-    needs: [loading, build]
-    uses: ./.github/workflows/test.yml
+    needs: [init-status, loading, build]
+    uses: qualcomm-linux/kernel-config/.github/workflows/test.yml@main
     secrets: inherit
     with:
       docker_image: kmake-image:ver.1.0
