@@ -28,7 +28,7 @@ jobs:
 
       - name: Sync codebase
         id: sync
-        uses: sgaud-quic/kernel-config/.github/actions/sync@main
+        uses: sgaud-quic/kernel-config/.github/actions/sync@flatbuild_working
         with:
           base_branch: ${{ github.base_ref }}
           pr_number: ${{ github.event.pull_request.number }}
