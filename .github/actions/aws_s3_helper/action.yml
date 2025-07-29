@@ -77,13 +77,18 @@ runs:
           download)
             #Download The required file from s3
             echo "Downloading files from S3 bucket..."
-            aws s3 cp s3://${{ inputs.s3_bucket }}/${{ inputs.download_file }} ${{ inputs.download_location }}
+            location=${{ inputs.download_location }}
+            download_dir=$(realpath "$location")
+            echo "Downloading ${{ inputs.download_file }} at ==> ${download_dir}"
+            aws s3 cp s3://${{ inputs.s3_bucket }}/${{ inputs.download_file }} "$download_dir"
+            echo "Downloaded ${{ inputs.download_file }} to $download_dir"
             ;;
           *)
             echo "Invalid mode. Use 'upload' or 'download'."
             exit 1
             ;;
         esac
+        echo "::endgroup::"
 
     - name: Upload artifacts
       if: ${{ inputs.mode == 'multi-upload' }}
