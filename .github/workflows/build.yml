@@ -52,7 +52,10 @@ jobs:
           echo "$bootbins"
           workspace=${{ steps.sync.outputs.workspace_path }}
           cd $workspace/../
+          rm -rf qcom-ptool
           git clone https://github.com/qualcomm-linux/qcom-ptool.git
+          filePath = "$(process.env.GITHUB_WORKSPACE)/scripts"
+          echo "Salendar : $filePath"
           for row in $(echo "$bootbins" | jq -c '.[]'); do
           (
             target=$(echo "$row" | jq -r '.target')
@@ -64,8 +67,9 @@ jobs:
             echo "-----------------------------"
             platform=$(echo "$buildid" | cut -d '.' -f1)
             echo "$platform"
-            mkdir -p $workspace/../flatbuild-"$platform"
-            cd $workspace/../flatbuild-"$platform"
+            mkdir -p $workspace/../kdev/flatbuild-"$platform"
+            cd $workspace/../kdev/flatbuild-"$platform"
+            $filePath/generate_flat_build.sh 
             wget https://artifactory-las.qualcomm.com/artifactory/lint-lv-local/k2c_nhlos_fw/$buildid/common/build/ufs/bin/"$platform"_bootbinaries.zip
             wget https://artifactory-las.qualcomm.com/artifactory/lint-lv-local/k2c_nhlos_fw/$buildid/common/build/ufs/bin/contents.zip
             unzip "$platform"_bootbinaries.zip
