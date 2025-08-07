@@ -3,7 +3,7 @@ name: ubuntu_package_generation
 run-name: Generate Ubuntu Packages
 
 on:
-  workflow_dispatch:
+   workflow_call:
     inputs:
       qcom-build-utils-pr-number:
         description: PR number to take the latest changes from (keep to use `ubuntu-noble-arm64` branch)
