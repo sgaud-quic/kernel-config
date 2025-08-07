@@ -194,7 +194,7 @@ jobs:
           mkdir Hamoa
           cd Hamoa
           docker run -i \
-          --privileged --rm -v /dev:/dev -v $PWD/..:/workspce --workdir="/workspace/Hamoa" kmake-image:ubuntu-noble-arm64 \
+          --privileged --rm -v /dev:/dev -v $PWD/..:/workspace --workdir="/workspace/Hamoa" kmake-image:ubuntu-noble-arm64 \
           -c '
             ../rootfs/scripts/build-ubuntu-rootfs.sh ../kernel/${{ steps.get_kernel_version.outputs.kernel_version }} ../linux-firmware-xelite_1.0-1+noble_arm64.deb
           '
@@ -202,7 +202,7 @@ jobs:
           mkdir KLM
           cd KLM
           docker run -i \
-          --privileged --rm -v /dev:/dev -v $PWD/..:/workspce --workdir="/workspace/KLM" kmake-image:ubuntu-noble-arm64 \
+          --privileged --rm -v /dev:/dev -v $PWD/..:/workspace --workdir="/workspace/KLM" kmake-image:ubuntu-noble-arm64 \
           -c '
             ../rootfs/scripts/build-ubuntu-rootfs.sh ../kernel/${{ steps.get_kernel_version.outputs.kernel_version }} ../linux-firmware_20250317.git1d4c88ee-0ubuntu1.3_arm64.deb
           '
