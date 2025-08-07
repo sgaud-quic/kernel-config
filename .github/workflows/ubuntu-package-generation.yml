@@ -50,7 +50,7 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
-          repository: qualcomm-linux/qcom-build-utils
+          repository: sgaud-quic/qcom-build-utils
           token: ${{ secrets.PAT }}
 
       - name: Get commit sha
