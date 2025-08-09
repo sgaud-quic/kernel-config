@@ -228,14 +228,16 @@ jobs:
           mkdir KLM
           cd KLM
           bootbins='${{ needs.loading.outputs.bootbins }}'
-          for row in $(echo "$bootbins" | jq -c '.[]'); do
+          
+          echo "$bootbins" | jq -c '.[]' | while read -r row; do
             target=$(echo "$row" | jq -r '.target')
             echo $target
-            docker run -i --rm --user $(id -u):$(id -g) -v $PWD/..:/workspace --workdir="/workspace/KLM" kmake-image:ver.1.0 \
-              bash  -c '
+            docker run -i \
+              --privileged --rm -v /dev:/dev -v $PWD/..:/workspace --workdir="/workspace/KLM" kmake-image:ver.1.0 \
+              -c '
                 generate_boot_bins.sh dtb --input ../kernel/qcom-next/arch/arm64/boot/dts/qcom/${target}.dtb --output ${target}_dtb
-            '
-            echo "${{ github.workspace }}/KLM/${target}_dtb/dtb.bin" >> ${{ github.workspace }}/file_list.txt
+              '
+          done
 
       - name: Create file list for artifacts upload
         run: |
