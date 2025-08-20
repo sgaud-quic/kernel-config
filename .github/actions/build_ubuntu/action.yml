@@ -200,7 +200,7 @@ runs:
       if: ${{ inputs.machine != 'hamoa' }}
       uses: qualcomm-linux/kernel-config/.github/actions/aws_s3_helper@main
       with:
-        s3_bucket: qli-stg-kernel-gh-artifacts
+        s3_bucket: qli-prd-kernel-gh-artifacts
         mode: download
         download_file: ${{ inputs.content }}
 
