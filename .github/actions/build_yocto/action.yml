@@ -56,7 +56,7 @@ runs:
       run: |
         echo "::group::$(printf '__________ %-100s' 'Build' | tr ' ' _)"
         cd meta-qcom
-        /local/mnt/workspace/qli/meta-qcom/kas-mirrors/kas-container build ci/${{ inputs.machine }}.yml:ci/qcom-distro.yml
+        ${{ inputs.kas }} build ci/${{ inputs.machine }}.yml:ci/qcom-distro.yml
         echo "::endgroup::"
 
     - name: Prepare file list for upload

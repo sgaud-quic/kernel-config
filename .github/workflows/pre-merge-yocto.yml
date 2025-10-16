@@ -25,6 +25,7 @@ on:
         description: Target repository
         type: string
         required: true
+
 env:
   CACHE_DIR: /local/mnt/workspace/qli/meta-qcom
   KAS_REPO_REF_DIR: /local/mnt/workspace/qli/meta-qcom/kas-mirrors
@@ -33,7 +34,13 @@ env:
 jobs:
   kas-setup:
     runs-on: [self-hosted]
+    outputs:
+      kas_path: ${{ steps.set_kas.outputs.kas_path }}    
     steps:
+      - name: Set kas path
+        id: set_kas
+        run: echo "kas_path=${KAS_CONTAINER}" >> $GITHUB_OUTPUT
+
       - name: Update kas-container
         run: |
           LATEST=$(git ls-remote --tags --refs --sort="v:refname" https://github.com/siemens/kas | tail -n1 | sed 's/.*\///')
@@ -114,4 +121,4 @@ jobs:
       ref: ${{ github.event.inputs.ref || 'qcom-next' }}
       repo: ${{ github.event.inputs.repo || 'qualcomm-linux-stg/kernel' }}
       build_matrix: ${{ needs.loading.outputs.ubuntu_matrix }}
-      kas: ${{ env.KAS_CONTAINER }}
+      kas: ${{ needs.kas-setup.outputs.kas_path }}
