@@ -18,6 +18,10 @@ on:
         required: false
         type: string
         default: ''
+      sha:
+        description: Head sha of the PR
+        type: string
+        required: true
       build_matrix:
         description: 'Build matrix for parallel builds'
         required: true
@@ -57,5 +61,6 @@ jobs:
           ref: ${{ inputs.ref }}
           build_utils_ref: ${{ inputs.build_utils_ref }}
           pr: ${{ inputs.pr }}
+          sha: ${{ inputs.sha }}
           machine: ${{ matrix.machine }}
           kas: ${{ inputs.kas }}

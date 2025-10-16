@@ -15,6 +15,10 @@ inputs:
     description: Pull request number to merge into the branch
     required: false
     default: ''
+  sha:
+    description: Head sha of the PR
+    required: true
+    type: string
   build_utils_ref:
     description: Reference for qcom-build-utils (latest commit sha)
     required: false
@@ -48,6 +52,14 @@ runs:
         echo "::group::$(printf '__________ %-100s' 'Sync' | tr ' ' _)"
         echo "Syncing meta-qcom ${{ inputs.kas }}"
         git clone https://${{ env.token }}@github.com/qualcomm-linux/meta-qcom.git --single-branch -b master --depth=1
+        echo "::endgroup::"
+
+    - name: Update qcom-next SHA
+      shell: bash
+      id: update_sha
+      run: |
+        echo "::group::$(printf '__________ %-100s' 'Sync' | tr ' ' _)"
+        sed -i 's/^SRCREV\s*?=\s*".*"/SRCREV ?= "${{ inputs.sha }}"/' meta-qcom/recipes-kernel/linux/linux-qcom-next_git.bb
         echo "::endgroup::"
 
     - name: Run build script
