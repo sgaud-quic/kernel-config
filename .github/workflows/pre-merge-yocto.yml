@@ -115,3 +115,4 @@ jobs:
       ref: ${{ github.event.inputs.ref || 'qcom-next' }}
       repo: ${{ github.event.inputs.repo || 'qualcomm-linux-stg/kernel' }}
       build_matrix: ${{ needs.loading.outputs.ubuntu_matrix }}
+      kas: ${KAS_CONTAINER}
