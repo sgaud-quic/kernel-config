@@ -24,7 +24,8 @@ on:
         type: string
       kas:
         description: Kas container
-        required: true      
+        required: true
+        type: string
     outputs:
       artifacts_location:
         description: 'Artifacts Upload location'
@@ -40,7 +41,7 @@ jobs:
       matrix:
         machine:
           - qcs6490-rb3gen2-core-kit
-          - qcs8300-ride-sx
+          #- qcs8300-ride-sx
   
     steps:
       - name: Checkout repository

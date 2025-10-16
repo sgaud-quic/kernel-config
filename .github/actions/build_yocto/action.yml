@@ -46,7 +46,7 @@ runs:
       id: sync
       run: |
         echo "::group::$(printf '__________ %-100s' 'Sync' | tr ' ' _)"
-        echo "Syncing meta-qcom"
+        echo "Syncing meta-qcom ${{ inputs.kas }}"
         git clone https://${{ env.token }}@github.com/qualcomm-linux/meta-qcom.git --single-branch -b master --depth=1
         echo "::endgroup::"
 
@@ -56,7 +56,7 @@ runs:
       run: |
         echo "::group::$(printf '__________ %-100s' 'Build' | tr ' ' _)"
         cd meta-qcom
-        ${{ inputs.kas }} build ci/${{ inputs.machine }}.yml:ci/qcom-distro.yml
+        /local/mnt/workspace/qli/meta-qcom/kas-mirrors/kas-container build ci/${{ inputs.machine }}.yml:ci/qcom-distro.yml
         echo "::endgroup::"
 
     - name: Prepare file list for upload
