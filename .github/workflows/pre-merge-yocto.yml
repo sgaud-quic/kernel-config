@@ -1,0 +1,117 @@
+---
+name: pre_merge_yocto
+run-name: Compile Yocto Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      qcom-build-utils-pr-number:
+        description: qcom-build-utils-pr-number (keep empty to use `latest` branch)
+        required: false
+        type: string
+      pr:
+        description: Pull request number
+        type: string
+        required: true
+      sha:
+        description: Head sha of the PR
+        type: string
+        required: true
+      ref:
+        description: Target branch
+        type: string
+        required: true
+      repo:
+        description: Target repository
+        type: string
+        required: true
+
+env:
+  CACHE_DIR: /local/mnt/workspace/qli/meta-qcom
+  KAS_REPO_REF_DIR: /local/mnt/workspace/qli/meta-qcom/kas-mirrors
+  KAS_CONTAINER: /local/mnt/workspace/qli/meta-qcom/kas-mirrors/kas-container
+
+jobs:
+  init-status:
+    name: Initialize Status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set Status
+        uses: qualcomm-linux/kernel-config/.github/actions/workflow_status@main
+        with:
+          sha: ${{ github.event.inputs.sha || github.sha }}
+          action_mode: start
+          check_name: "Yocto Build Generation"
+          repo: ${{ github.event.inputs.repo || github.repository }}
+          GH_TOKEN: ${{ secrets.PAT }}
+
+  init:
+    name: Initialize Workflow
+    needs: init-status
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.get_sha.outputs.commit_sha }}
+    steps:
+      - name: Checkout qcom-build-utils
+        uses: actions/checkout@v4
+        with:
+          repository: sgaud-quic/qcom-build-utils
+          token: ${{ secrets.SPAT }}
+
+      - name: Get commit sha
+        id: get_sha
+        run: |
+          echo "${{ secrets.SPAT }}" | gh auth login --with-token
+          if [ -n "${{ github.event.inputs.qcom-build-utils-pr-number }}" ]; then
+           # fetch latest commit hash from the PR branch
+            commit_sha=$(gh pr view ${{ github.event.inputs.qcom-build-utils-pr-number }} --json commits --jq '.commits[-1].oid')
+            echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          else
+            # use the latest commit hash from the latest branch
+            commit_sha=$(gh api repos/sgaud-quic/meta-qcom/branches/master --jq '.commit.sha')
+            echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "commit_sha=${commit_sha}"
+
+      - name: Update Summary
+        run: |
+          echo "## Ubuntu Package Generation" >> $GITHUB_STEP_SUMMARY
+          echo "- Pull Request Number: \`${{ github.event.inputs.pr || 'N/A' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Head Commit SHA: \`${{ github.event.inputs.sha || 'N/A' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Target Branch: \`${{ github.event.inputs.ref || 'N/A' }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Target Repository: \`${{ github.event.inputs.repo || 'N/A' }}\`" >> $GITHUB_STEP_SUMMARY
+
+  kas-setup:
+    runs-on: [self-hosted]
+    steps:
+      - name: Update kas-container
+        run: |
+          LATEST=$(git ls-remote --tags --refs --sort="v:refname" https://github.com/siemens/kas | tail -n1 | sed 's/.*\///')
+          wget -qO ${KAS_CONTAINER} https://raw.githubusercontent.com/siemens/kas/refs/tags/$LATEST/kas-container
+          chmod +x ${KAS_CONTAINER}
+
+      - name: Update kas mirrors
+        run: |
+          for r in $(find ${KAS_REPO_REF_DIR}/* -maxdepth 0 -type d); do
+            echo "pre-fetch: $r"
+            git -C $r fetch --prune origin '+refs/*:refs/*'
+          done
+
+      - uses: actions/checkout@v4
+
+  loading:
+    name: Load Parameters
+    needs: init-status
+    uses: sgaud-quic/kernel-config/.github/workflows/loading.yml@main
+    secrets: inherit
+
+  build_yocto:
+    name: Build Yocto
+    needs: [init-status, init, loading, kas-setup]
+    uses: sgaud-quic/kernel-config/.github/workflows/yocto-build.yml@main
+    secrets: inherit
+    with:
+      pr: ${{ github.event.inputs.pr || '' }}
+      ref: ${{ github.event.inputs.ref || 'qcom-next' }}
+      repo: ${{ github.event.inputs.repo || 'qualcomm-linux-stg/kernel' }}
+      build_matrix: ${{ needs.loading.outputs.ubuntu_matrix }}

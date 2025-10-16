@@ -1,0 +1,57 @@
+---
+name: _ubuntu
+description: Reusable workflow for Yocto Build
+
+on:
+  workflow_call:
+    inputs:
+      repo:
+        description: 'Repo Name'
+        required: false
+        type: string
+      ref:
+        description: 'Branch or tag name'
+        required: false
+        type: string
+      pr:
+        description: 'Pull Request Number'
+        required: false
+        type: string
+        default: ''
+      build_matrix:
+        description: 'Build matrix for parallel builds'
+        required: true
+        type: string
+    outputs:
+      artifacts_location:
+        description: 'Artifacts Upload location'
+        value: ${{ jobs.generate_debians.outputs.artifacts_location }}
+
+jobs:
+  build_yocto:
+    name: Build Yocto
+    runs-on:
+      labels: [self-hosted]
+    strategy:
+      fail-fast: false
+      matrix:
+        machine:
+          - qcs6490-rb3gen2-core-kit
+          - qcs8300-ride-sx
+  
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.PAT }}
+
+      - name: Build Yocto
+        id: build
+        uses: sgaud-quic/kernel-config/.github/actions/build_yocto@main
+        with:
+          repo: ${{ inputs.repo }}
+          ref: ${{ inputs.ref }}
+          build_utils_ref: ${{ inputs.build_utils_ref }}
+          pr: ${{ inputs.pr }}
+          machine: ${{ matrix.machine }}
+          kas: ${{ KAS_CONTAINER }}

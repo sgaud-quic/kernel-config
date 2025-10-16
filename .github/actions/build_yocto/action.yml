@@ -1,0 +1,68 @@
+---
+name: Build Ubuntu Packages
+description: Build Ubuntu packages for different targets
+
+inputs:
+  repo:
+    description: Repository to sync kernel codebase from
+    required: false
+    default: qualcomm-linux/kernel
+  ref:
+    description: Branch or tag to sync from
+    required: false
+    default: qcom-next
+  pr:
+    description: Pull request number to merge into the branch
+    required: false
+    default: ''
+  build_utils_ref:
+    description: Reference for qcom-build-utils (latest commit sha)
+    required: false
+    default: 'latest'
+  machine:
+    description: Machine to build the kernel for
+    required: true
+  kas:
+    description: Kas container
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    #- name: Checkout meta-qcom repository
+    #  uses: actions/checkout@v4
+    #  with:
+    #    repository: sgaud-quic/meta-qcom
+
+    - name: Setup git config and Logging
+      shell: bash
+      run: |
+        git config --global user.name "QLI CI Bot"
+        git config --global user.email "qualcomm-linux@qualcomm.com"
+        echo "LOGFILE=${{ github.workspace }}/build-logs.log" >> "$GITHUB_ENV"
+
+    - name: Sync meta-qcom
+      shell: bash
+      id: sync
+      run: |
+        echo "::group::$(printf '__________ %-100s' 'Sync' | tr ' ' _)"
+        echo "Syncing meta-qcom"
+        git clone https://${{ env.token }}@github.com/qualcomm-linux/meta-qcom.git --single-branch -b master --depth=1
+        echo "::endgroup::"
+
+    - name: Run build script
+      id: build
+      shell: bash
+      run: |
+        echo "::group::$(printf '__________ %-100s' 'Build' | tr ' ' _)"
+        cd meta-qcom
+        ${{ inputs.kas }} build ci/${{ inputs.machine }}.yml:ci/qcom-distro.yml
+        echo "::endgroup::"
+
+    - name: Prepare file list for upload
+      id: process_files
+      shell: bash
+      run: |
+        touch file_list.txt
+        echo "Salendar path : ${{ github.workspace }}"
+        echo "${{ github.workspace }}" >> file_list.txt
