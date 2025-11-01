@@ -55,11 +55,14 @@ jobs:
 
       - name: Sync codebase
         id: sync
-        uses: qualcomm-linux/kernel-config/.github/actions/sync@main
-        with:
-          base_branch: ${{ inputs.ref }}
-          pr_number: ${{ inputs.pr_number}}
-          GH_TOKEN: ${{ secrets.PAT }}
+        shell : bash
+        run : |
+          git clone https://github.com/sgaud-quic/kernel.git -b ${{ inputs.ref }}
+        #uses: qualcomm-linux/kernel-config/.github/actions/sync@main
+        #with:
+        #  base_branch: ${{ inputs.ref }}
+        #  pr_number: ${{ inputs.pr_number}}
+        #  GH_TOKEN: ${{ secrets.PAT }}
 
       - name: Pull docker image
         uses: qualcomm-linux/kernel-config/.github/actions/pull_docker_image@main
