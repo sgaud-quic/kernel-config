@@ -26,36 +26,7 @@ on:
         type: string
         required: true
 
-env:
-  CACHE_DIR: /local/mnt/workspace/qli/meta-qcom
-  KAS_REPO_REF_DIR: /local/mnt/workspace/qli/meta-qcom/kas-mirrors
-  KAS_CONTAINER: /local/mnt/workspace/qli/meta-qcom/kas-mirrors/kas-container
-
 jobs:
-  kas-setup:
-    runs-on: [self-hosted]
-    outputs:
-      kas_path: ${{ steps.set_kas.outputs.kas_path }}    
-    steps:
-      - name: Set kas path
-        id: set_kas
-        run: echo "kas_path=${KAS_CONTAINER}" >> $GITHUB_OUTPUT
-
-      - name: Update kas-container
-        run: |
-          LATEST=$(git ls-remote --tags --refs --sort="v:refname" https://github.com/siemens/kas | tail -n1 | sed 's/.*\///')
-          wget -qO ${KAS_CONTAINER} https://raw.githubusercontent.com/siemens/kas/refs/tags/$LATEST/kas-container
-          chmod +x ${KAS_CONTAINER}
-
-      - name: Update kas mirrors
-        run: |
-          for r in $(find ${KAS_REPO_REF_DIR}/* -maxdepth 0 -type d); do
-            echo "pre-fetch: $r"
-            git -C $r fetch --prune origin '+refs/*:refs/*'
-          done
-
-      - uses: actions/checkout@v4
-
   init-status:
     name: Initialize Status
     runs-on: ubuntu-latest
@@ -76,27 +47,6 @@ jobs:
     outputs:
       commit_sha: ${{ steps.get_sha.outputs.commit_sha }}
     steps:
-      - name: Checkout qcom-build-utils
-        uses: actions/checkout@v4
-        with:
-          repository: sgaud-quic/qcom-build-utils
-          token: ${{ secrets.SPAT }}
-
-      - name: Get commit sha
-        id: get_sha
-        run: |
-          echo "${{ secrets.SPAT }}" | gh auth login --with-token
-          if [ -n "${{ github.event.inputs.qcom-build-utils-pr-number }}" ]; then
-           # fetch latest commit hash from the PR branch
-            commit_sha=$(gh pr view ${{ github.event.inputs.qcom-build-utils-pr-number }} --json commits --jq '.commits[-1].oid')
-            echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-          else
-            # use the latest commit hash from the latest branch
-            commit_sha=$(gh api repos/sgaud-quic/meta-qcom/branches/master --jq '.commit.sha')
-            echo "commit_sha=${commit_sha}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "commit_sha=${commit_sha}"
-
       - name: Update Summary
         run: |
           echo "## Ubuntu Package Generation" >> $GITHUB_STEP_SUMMARY
@@ -113,13 +63,13 @@ jobs:
 
   build_yocto:
     name: Build Yocto
-    needs: [init-status, init, loading, kas-setup]
+    needs: [init-status, init, loading]
     uses: sgaud-quic/kernel-config/.github/workflows/yocto-build.yml@main
     secrets: inherit
     with:
+      docker_image: kmake-image:ver.1.0
       pr: ${{ github.event.inputs.pr || '' }}
       SHA: ${{ github.event.inputs.sha }}
       ref: ${{ github.event.inputs.ref || 'qcom-next' }}
       repo: ${{ github.event.inputs.repo || 'qualcomm-linux-stg/kernel' }}
       build_matrix: ${{ needs.loading.outputs.ubuntu_matrix }}
-      kas: ${{ needs.kas-setup.outputs.kas_path }}

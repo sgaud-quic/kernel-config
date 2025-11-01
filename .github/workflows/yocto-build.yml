@@ -1,10 +1,14 @@
 ---
-name: _ubuntu
+name: _build_yocto
 description: Reusable workflow for Yocto Build
 
 on:
   workflow_call:
     inputs:
+      docker_image:
+        description: Docker image
+        type: string
+        required: true
       repo:
         description: 'Repo Name'
         required: false
@@ -18,16 +22,16 @@ on:
         required: false
         type: string
         default: ''
+      branch:
+        description: Branch name
+        type: string
+        required: false
       sha:
         description: Head sha of the PR
         type: string
         required: true
       build_matrix:
         description: 'Build matrix for parallel builds'
-        required: true
-        type: string
-      kas:
-        description: Kas container
         required: true
         type: string
     outputs:
@@ -42,25 +46,41 @@ jobs:
       labels: [self-hosted]
     strategy:
       fail-fast: false
-      matrix:
-        machine:
-          - qcs6490-rb3gen2-core-kit
-          #- qcs8300-ride-sx
-  
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.PAT }}
 
-      - name: Build Yocto
-        id: build
-        uses: sgaud-quic/kernel-config/.github/actions/build_yocto@main
+      - name: Sync codebase
+        id: sync
+        uses: qualcomm-linux/kernel-config/.github/actions/sync@main
         with:
-          repo: ${{ inputs.repo }}
-          ref: ${{ inputs.ref }}
-          build_utils_ref: ${{ inputs.build_utils_ref }}
-          pr: ${{ inputs.pr }}
-          sha: ${{ inputs.sha }}
-          machine: ${{ matrix.machine }}
-          kas: ${{ inputs.kas }}
+          base_branch: ${{ inputs.ref }}
+          pr_number: ${{ inputs.pr_number}}
+          GH_TOKEN: ${{ secrets.PAT }}
+
+      - name: Pull docker image
+        uses: qualcomm-linux/kernel-config/.github/actions/pull_docker_image@main
+        with:
+          image: ${{ inputs.docker_image }}
+
+      - name: Build workspace
+        id: build_workspace
+        uses: qualcomm-linux/kernel-config/.github/actions/build@main
+        with:
+          docker_image: ${{ inputs.docker_image }}
+          workspace_path: ${{ steps.sync.outputs.workspace_path }}
+
+#      - name: Build Yocto
+#        id: build
+#        uses: sgaud-quic/kernel-config/.github/actions/build_yocto@main
+#        with:
+##          repo: ${{ inputs.repo }}
+#          ref: ${{ inputs.ref }}
+#          build_utils_ref: ${{ inputs.build_utils_ref }}
+#          pr: ${{ inputs.pr }}
+#          sha: ${{ inputs.sha }}
+#          machine: ${{ matrix.machine }}
+#          kas: ${{ inputs.kas }}
