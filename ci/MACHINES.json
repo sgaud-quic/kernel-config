@@ -75,7 +75,7 @@
     "lavaname": "kaanapali-mtp",
     "target": "kaanapali-mtp",
     "buildid": "",
-    "firmwareid": "",
+    "firmwareid": "kaanapali-mtp",
     "rootfs": "kaanapali-mtp",
     "flash_type": "qdl"
   },
@@ -95,7 +95,7 @@
     "lavaname": "glymur-crd",
     "target": "glymur-crd",
     "buildid": "",
-    "firmwareid": "",
+    "firmwareid": "glymur-crd",
     "rootfs": "glymur-crd",
     "flash_type": "qdl"
   }
