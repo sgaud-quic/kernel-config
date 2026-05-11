@@ -122,18 +122,27 @@ runs:
         buildconf_repo="https://x-access-token:${{ env.token }}@github.com/qualcomm-linux/meta-qcom-buildconf.git"
         echo "buildconf_repo=$buildconf_repo" >> $GITHUB_ENV
         base="${{ inputs.base }}"
-        # Checkout meta-qcom-buildconf
-        if [[ $base == "tip" ]]; then
-          buildconf_tag="$(git ls-remote --tags "$buildconf_repo" \
-                            | awk -F/ '{print $NF}' \
-                            | sed 's/\^{}//' \
-                            | sort -V \
-                            | tail -n 1
-                          )"
+        branch="${{ inputs.branch }}"
+        # Select ref prefix based on kernel branch
+        if [[ "$branch" == "qcom-6.18.y" ]]; then
+          ref_prefix="wrynose"
         else
-          buildconf_tag=$base
+          ref_prefix="master"
         fi
-        echo "buildconf_tag=$buildconf_tag" >> $GITHUB_ENV
+        if [[ "$base" == "tip" ]]; then
+          # Use the latest tag matching the prefix (wrynose-* or master-*)
+          buildconf_ref="$(git ls-remote --tags "$buildconf_repo" \
+                             | awk -F/ '{print $NF}' \
+                             | sed 's/\^{}//' \
+                             | grep "^${ref_prefix}-" \
+                             | sort -V \
+                             | tail -n 1
+                           )"
+        else
+          # base is an explicit tag — use it as-is
+          buildconf_ref="$base"
+        fi
+        echo "buildconf_ref=$buildconf_ref" >> $GITHUB_ENV
 
     - name: Run Kas Build
       id: build
@@ -146,8 +155,8 @@ runs:
         export KAS_WORK_DIR=$PWD/kas
         echo $KAS_WORK_DIR
         kernel_ver="${{ env.kernel_ver }}"
-        echo "meta-qcom-buildconf tag : ${{ env.buildconf_tag }}"
-        git clone ${{ env.buildconf_repo }} -b  ${{ env.buildconf_tag }}
+        echo "meta-qcom-buildconf ref : ${{ env.buildconf_ref }}"
+        git clone ${{ env.buildconf_repo }} -b  ${{ env.buildconf_ref }}
         $KAS_CONTAINER checkout meta-qcom-buildconf/lock.yml
         cp meta-qcom-buildconf/lock.yml $KAS_WORK_DIR/meta-qcom/ci/lock.yml
         cat kernel-override.yml
