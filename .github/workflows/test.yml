@@ -183,7 +183,7 @@ jobs:
 
           jq '
             (if type=="object" and .results then .results else . end)
-              | map(select(.metadata | tostring | contains("0_qcom-next-ci-premerge-tests")))
+              | map(select(.metadata | tostring | startswith("definition: 0_qcom-next-ci-premerge-tests")))
               | map(select(.result == "pass" or .result == "fail" or .result == "skip" or .result == "error"))
               | map({
                       name: .name,
