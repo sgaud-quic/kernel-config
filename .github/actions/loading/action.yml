@@ -2,6 +2,12 @@
 name: Load Parameters
 description: Load parameters for the build job
 
+inputs:
+  branch:
+    description: Target branch used to filter test targets
+    required: false
+    default: ""
+
 outputs:
   build_matrix:
     description: Build matrix
@@ -29,6 +35,8 @@ runs:
     - name: Set Build Matrix
       id: set-matrix
       uses: actions/github-script@v7
+      env:
+        INPUT_BRANCH: ${{ inputs.branch }}
       with:
         script: |
           const fs = require('fs');
@@ -65,8 +73,10 @@ runs:
           console.log("Boot Bins:", bootbins);
 
           // rootfs matrix: machine, rootfs
+          const branch = process.env.INPUT_BRANCH || "";
           const rootfs_matrix = Object.values(targets)
-            .filter(({ rootfs }) => rootfs && rootfs.trim() !== '') // filter out empty or null in case Yocto Build is not enabled on a target
+            .filter(({ rootfs }) => rootfs && rootfs.trim() !== '')
+            .filter(({ branches }) => !branch || !branches || branches.includes(branch))
             .map(({ machine, rootfs, firmwareid, lavaname, flash_type }) => ({ machine, rootfs, firmwareid, lavaname, flash_type }));
           core.setOutput('rootfs_matrix', JSON.stringify(rootfs_matrix));
           console.log("Rootfs Matrix:", rootfs_matrix);

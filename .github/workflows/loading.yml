@@ -4,6 +4,12 @@ description: Load required parameters for the subsequent jobs
 
 on:
   workflow_call:
+    inputs:
+      branch:
+        description: Target branch used to filter test targets
+        type: string
+        required: false
+        default: ""
     outputs:
       build_matrix:
         description: Build matrix
@@ -43,3 +49,5 @@ jobs:
       - name: Load Parameters
         id: loading
         uses: qualcomm-linux/kernel-config/.github/actions/loading@main
+        with:
+          branch: ${{ inputs.branch }}
