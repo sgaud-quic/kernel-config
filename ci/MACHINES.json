@@ -7,7 +7,8 @@
     "buildid": "QCM6490.LE.1.0-00376-STD.PROD-1",
     "firmwareid": "rb3gen2",
     "rootfs": "rb3gen2-core-kit",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "qcs9100-ride-r3": {
     "machine": "qcs9100-ride-r3",
@@ -17,7 +18,8 @@
     "buildid": "QCS9100.LE.1.0-00243-STD.PROD-1",
     "firmwareid": "sa8775p-ride",
     "rootfs": "qcs9100-ride-sx",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "qcs8300-ride": {
     "machine": "qcs8300-ride",
@@ -27,7 +29,8 @@
     "buildid": "QCS8300.LE.1.0-00137-STD.PROD-1",
     "firmwareid": "qcs8300-ride",
     "rootfs": "qcs8300-ride-sx",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "sm8750-mtp": {
     "machine": "sm8750-mtp",
@@ -37,7 +40,8 @@
     "buildid": "",
     "firmwareid": "sm8750-mtp",
     "rootfs": "sm8750-mtp",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging"]
   },
   "lemans-evk": {
     "machine": "lemans-evk",
@@ -47,7 +51,8 @@
     "buildid": "QCS9100.LE.1.0-00243-STD.PROD-1",
     "firmwareid": "sa8775p-ride",
     "rootfs": "iq-9075-evk",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "monaco-evk": {
     "machine": "monaco-evk",
@@ -57,7 +62,8 @@
     "buildid": "QCS8300.LE.1.0-00137-STD.PROD-1",
     "firmwareid": "qcs8300-ride",
     "rootfs": "iq-8275-evk",
-    "flash_type": "fastboot"
+    "flash_type": "fastboot",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "qcs615-adp-air": {
     "machine": "qcs615-ride",
@@ -67,7 +73,8 @@
     "buildid": "",
     "firmwareid": "qcs615-ride",
     "rootfs": "qcs615-ride",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "kaanapali-mtp": {
     "machine": "kaanapali-mtp",
@@ -77,7 +84,8 @@
     "buildid": "",
     "firmwareid": "kaanapali-mtp",
     "rootfs": "kaanapali-mtp",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging"]
   },
   "x1e80100-crd": {
     "machine": "x1e80100-crd",
@@ -87,7 +95,8 @@
     "buildid": "",
     "firmwareid": "",
     "rootfs": "iq-x7181-evk",
-    "flash_type": "fastboot"
+    "flash_type": "fastboot",
+    "branches": ["qcom-next-staging", "qcom-6.18.y"]
   },
   "glymur-crd": {
     "machine": "glymur-crd",
@@ -97,6 +106,7 @@
     "buildid": "",
     "firmwareid": "glymur-crd",
     "rootfs": "glymur-crd",
-    "flash_type": "qdl"
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging"]
   }
 }
