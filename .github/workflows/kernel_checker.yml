@@ -1,4 +1,5 @@
 name: Kernel Checkers
+run-name: "${{ format('kernel-checker: {0} - PR #{1}', inputs.repo, inputs.pr) }}"
 on:
   workflow_dispatch:
     inputs:
