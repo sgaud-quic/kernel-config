@@ -177,13 +177,18 @@ jobs:
 
           mkdir -p lava-results
 
-          curl -s "https://lava-oss.qualcomm.com/api/v0.2/jobs/$JOB_ID/tests/" > results.json
+          curl -s "https://lava-oss.qualcomm.com/api/v0.2/jobs/$JOB_ID/tests/?limit=500" > results.json
           echo "Downloaded results to results.json"
           jq '.[0] ? // . | length' results.json || true
 
-          jq '
+          # Determine the suite id for the premerge test suite (anything that is not 'lava')
+          SUITE_ID=$(curl -s "https://lava-oss.qualcomm.com/api/v0.2/jobs/$JOB_ID/suites/" \
+            | jq -r '.results[] | select(.name != "lava") | .id')
+          echo "Premerge suite id: $SUITE_ID"
+
+          jq --argjson suite_id "${SUITE_ID}" '
             (if type=="object" and .results then .results else . end)
-              | map(select(.metadata | tostring | startswith("definition: 0_qcom-next-ci-premerge-tests")))
+              | map(select(.suite == $suite_id))
               | map(select(.result == "pass" or .result == "fail" or .result == "skip" or .result == "error"))
               | map({
                       name: .name,
