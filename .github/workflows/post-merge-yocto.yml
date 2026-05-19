@@ -190,7 +190,8 @@ jobs:
               printf "| --- | :---: | :---: | :---: | :---: |\n"
               for t in "${TARGETS[@]}"; do
                 f="$INPUT_DIR/Tests-${t}.json"
-                total=$(jq 'length' "$f")
+                total=$(jq 'length' "$f" 2>/dev/null || echo 0)
+                total="${total:-0}"
                 if [ "$total" -eq 0 ]; then
                   printf "| %s | ➖ | ➖ | ➖ | N/A (Incomplete) |\n" "$t"
                 else
