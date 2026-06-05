@@ -171,8 +171,8 @@ runs:
             meta_qcom_ref="master"
           fi
 
-          git clone https://github.com/qualcomm-linux/meta-qcom.git -b $meta_qcom_ref
-          meta_qcom_sha=$(git -C meta-qcom rev-parse HEAD)
+          git clone https://github.com/qualcomm-linux/meta-qcom.git -b $meta_qcom_ref "$KAS_WORK_DIR/meta-qcom"
+          meta_qcom_sha=$(git -C "$KAS_WORK_DIR/meta-qcom" rev-parse HEAD)
           echo $meta_qcom_sha > build_id.txt
           cat build_id.txt
           cat kernel-override.yml
