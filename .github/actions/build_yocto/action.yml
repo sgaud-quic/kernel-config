@@ -201,17 +201,26 @@ runs:
             echo "PR #$pr merged successfully."
           else
             echo "Nothing to commit for PR #$pr (already merged or fast-forwarded)."
-            git merge --abort 2>/dev/null || true
           fi
           echo "::endgroup::"
         done
+
+        cat > "${{ env.CI_YAML_DIR }}/meta_qcom_override.yml" <<EOF
+        header:
+          version: 14
+        repos:
+          meta-qcom:
+            path:
+            url:
+        EOF
+        echo "pr_override_arg=:${{ env.CI_YAML_DIR }}/meta_qcom_override.yml" >> $GITHUB_ENV
 
     - name: Build
       shell: bash
       run: |
         cd ${{ env.build_dir }}
         echo "In build : lock_arg : ${{ env.lock_arg }}"
-        $KAS_CONTAINER build ${{ env.CI_YAML_DIR }}/${{ env.rootfs }}.yml:${{ env.CI_YAML_DIR }}/${{ inputs.kernel_yaml }}.yml:${{ env.CI_YAML_DIR }}/qcom-distro.yml:${{ env.CI_YAML_DIR }}/kernel-override.yml${{ env.lock_arg }}
+        $KAS_CONTAINER build ${{ env.CI_YAML_DIR }}/${{ env.rootfs }}.yml:${{ env.CI_YAML_DIR }}/${{ inputs.kernel_yaml }}.yml:${{ env.CI_YAML_DIR }}/qcom-distro.yml:${{ env.CI_YAML_DIR }}/kernel-override.yml${{ env.lock_arg }}${{ env.pr_override_arg }}
 
         if [[ "${{ env.kernel_ver }}" == "6.18" ]]; then
           recipe="linux-qcom"
@@ -219,7 +228,7 @@ runs:
           recipe="linux-qcom-next"
         fi
 
-        raw_ver=$($KAS_CONTAINER shell ${{ env.CI_YAML_DIR }}/${{ env.rootfs }}.yml:${{ env.CI_YAML_DIR }}/${{ inputs.kernel_yaml }}.yml:${{ env.CI_YAML_DIR }}/qcom-distro.yml:${{ env.CI_YAML_DIR }}/kernel-override.yml${{ env.lock_arg }} -c "bitbake -e $recipe | grep '^KERNEL_VERSION='" | cut -d'"' -f2)
+        raw_ver=$($KAS_CONTAINER shell ${{ env.CI_YAML_DIR }}/${{ env.rootfs }}.yml:${{ env.CI_YAML_DIR }}/${{ inputs.kernel_yaml }}.yml:${{ env.CI_YAML_DIR }}/qcom-distro.yml:${{ env.CI_YAML_DIR }}/kernel-override.yml${{ env.lock_arg }}${{ env.pr_override_arg }} -c "bitbake -e $recipe | grep '^KERNEL_VERSION='" | cut -d'"' -f2)
         echo "raw_kernel_version=$raw_ver" >> $GITHUB_ENV
 
     - name: Get Kernel Version
