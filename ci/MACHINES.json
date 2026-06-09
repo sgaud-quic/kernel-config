@@ -62,7 +62,7 @@
     "buildid": "QCS8300.LE.1.0-00137-STD.PROD-1",
     "firmwareid": "qcs8300-ride",
     "rootfs": "iq-8275-evk",
-    "flash_type": "fastboot",
+    "flash_type": "qdl",
     "branches": ["qcom-next-staging", "qcom-6.18.y", "tech/mproc/rpmsg", "tech/mproc/all", "tech/net/qrtr"]
   },
   "qcs615-adp-air": {
