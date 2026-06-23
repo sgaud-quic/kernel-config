@@ -228,13 +228,13 @@ runs:
         echo "::group::$(printf '__________ %-100s' 'Generate flat_meta' | tr ' ' _)"
         set -eux -o pipefail
         # CLone ptools repository
-        cd .. && git clone https://github.com/qualcomm-linux/qcom-ptool.git && cd -
+        git clone https://github.com/qualcomm-linux/qcom-ptool.git
         bootbin_filename=$(ls *bootbinaries.zip)
         unzip $bootbin_filename
         bootbin_dirname="${bootbin_filename%.zip}"
         echo "==>Generating flat_meta for machine: ${{ inputs.machine }}"
         echo "==>Logging to $LOGFILE"
-        python3 ../qcom-ptool/ptool.py \
+        PYTHONPATH=./qcom-ptool python3 -m qcom_ptool.cli ptool \
           -x $bootbin_dirname/partition_ufs.xml \
           -t $bootbin_dirname >> "$LOGFILE" 2>&1
         echo "==>flat_meta generated. Log saved to $LOGFILE"
