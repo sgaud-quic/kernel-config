@@ -87,15 +87,15 @@
     "flash_type": "qdl",
     "branches": ["qcom-next-staging"]
   },
-  "x1e80100-crd": {
-    "machine": "x1e80100-crd",
-    "firmware": "",
-    "lavaname": "x1e80100",
-    "target": "x1e80100-crd",
+  "hamoa-iot-evk": {
+    "machine": "hamoa-iot-evk",
+    "firmware": "iq-x7181-evk",
+    "lavaname": "hamoa-evk",
+    "target": "hamoa-iot-evk",
     "buildid": "",
-    "firmwareid": "",
+    "firmwareid": "iq-x7181-evk",
     "rootfs": "iq-x7181-evk",
-    "flash_type": "fastboot",
+    "flash_type": "qdl",
     "branches": ["qcom-next-staging", "qcom-6.18.y", "tech/mproc/rpmsg", "tech/mproc/all", "tech/net/qrtr"]
   },
   "glymur-crd": {
@@ -106,6 +106,17 @@
     "buildid": "",
     "firmwareid": "glymur-crd",
     "rootfs": "glymur-crd",
+    "flash_type": "qdl",
+    "branches": ["qcom-next-staging"]
+  },
+  "qrb2210-rb1": {
+    "machine": "qrb2210-rb1",
+    "firmware": "rb1",
+    "lavaname": "rb1",
+    "target": "qrb2210-rb1",
+    "buildid": "",
+    "firmwareid": "rb1",
+    "rootfs": "rb1-core-kit",
     "flash_type": "qdl",
     "branches": ["qcom-next-staging"]
   }
