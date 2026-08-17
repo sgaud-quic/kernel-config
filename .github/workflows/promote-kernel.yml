@@ -37,6 +37,7 @@ jobs:
         with:
           repository: qualcomm-linux/kernel
           path: kernel-src
+          fetch-depth: 0
           filter: blob:none
           fetch-tags: true
           token: ${{ secrets.PAT || github.token }}
