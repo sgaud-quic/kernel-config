@@ -247,7 +247,8 @@ jobs:
   # STABLE KERNEL TAG SYNC
   #
   # Fetches the latest vX.Y.Z release tag for each tracked stable series from
-  # git.kernel.org/stable and pushes it to qualcomm-linux/kernel.
+  # git.kernel.org/stable and pushes it to qualcomm-linux/kernel and
+  # qualcomm-linux/kernel-topics.
   #
   # To track a new stable series in the future, simply add its version string
   # to the matrix list below, e.g.:
@@ -340,6 +341,33 @@ jobs:
 
           git push origin "refs/tags/$tag:refs/tags/$tag"
           echo "Pushed $tag to qualcomm-linux/kernel."
+
+      - name: Push stable tag to qualcomm-linux/kernel-topics
+        if: ${{ !inputs.dry_run }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          set -euo pipefail
+          cd kernel
+
+          tag="${{ steps.tag.outputs.tag }}"
+          tag_sha="${{ steps.tag.outputs.tag_sha }}"
+          remote="https://x-access-token:${GH_TOKEN}@github.com/qualcomm-linux/kernel-topics.git"
+
+          if git ls-remote --exit-code --tags "$remote" "refs/tags/$tag" >/dev/null 2>&1; then
+            remote_sha=$(git ls-remote --tags "$remote" "refs/tags/$tag" | awk '{print $1}')
+            if [ "$remote_sha" = "$tag_sha" ]; then
+              echo "Tag $tag already exists on qualcomm-linux/kernel-topics with correct SHA. Nothing to do."
+              exit 0
+            fi
+            echo "ERROR: tag $tag already exists on qualcomm-linux/kernel-topics with a different SHA."
+            echo "Remote: $remote_sha  Expected: $tag_sha"
+            exit 1
+          fi
+
+          git push "$remote" "refs/tags/$tag:refs/tags/$tag"
+          echo "Pushed $tag to qualcomm-linux/kernel-topics."
 
       - name: Summary
         if: always()
