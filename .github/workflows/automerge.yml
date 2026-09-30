@@ -83,6 +83,8 @@ jobs:
           cp topic_SHA1 qcom-next
           cp ../merge.log qcom-next/
           sed -i 's/\r$//' qcom-next/merge.log
+          sed -i -E 's#https://x-access-token:[^/@[:space:]]+@github\.com/#https://x-access-token:***@github.com/#g' qcom-next/merge.log
+          sed -i -E 's#https://[^/@[:space:]]+@github\.com/#https://***@github.com/#g' qcom-next/merge.log
           git config user.email "sgaud@qti.qualcomm.com"
           git config user.name  "Salendarsingh Gaud"
           git add qcom-next/merge.log qcom-next/topic_SHA1
