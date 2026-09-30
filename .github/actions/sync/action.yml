@@ -67,32 +67,148 @@ runs:
       run: |
         set -euo pipefail
         cd kernel
-        git fetch "https://x-access-token:${GH_TOKEN}@github.com/qualcomm-linux/kernel-topics.git" \
-          "pull/${{ inputs.pr_number }}/head:pr-${{ inputs.pr_number }}"
 
-        commits_file="${RUNNER_TEMP}/kernel-topics-pr-${{ inputs.pr_number }}-commits"
-        : > "${commits_file}"
-        page=1
-        while :; do
-          commits_json="$(curl -fsSL \
+        api_get() {
+          curl -fsSL \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/qualcomm-linux/kernel-topics/pulls/${{ inputs.pr_number }}/commits?per_page=100&page=${page}")"
-          count="$(jq 'length' <<< "${commits_json}")"
-          jq -r '.[].sha' <<< "${commits_json}" >> "${commits_file}"
-          [ "${count}" -lt 100 ] && break
-          page=$((page + 1))
-        done
-        mapfile -t commits < "${commits_file}"
+            "$1"
+        }
 
-        if [ "${#commits[@]}" -eq 0 ]; then
-          echo "ERROR: no commits found to cherry-pick from kernel-topics PR #${{ inputs.pr_number }}" >&2
+        get_pr_commits() {
+          local pr="$1"
+          local commits_file="${RUNNER_TEMP}/kernel-topics-pr-${pr}-commits"
+          local commits_json count page
+
+          : > "${commits_file}"
+          page=1
+          while :; do
+            commits_json="$(api_get "https://api.github.com/repos/qualcomm-linux/kernel-topics/pulls/${pr}/commits?per_page=100&page=${page}")"
+            count="$(jq 'length' <<< "${commits_json}")"
+            jq -r '.[].sha' <<< "${commits_json}" >> "${commits_file}"
+            [ "${count}" -lt 100 ] && break
+            page=$((page + 1))
+          done
+
+          cat "${commits_file}"
+        }
+
+        cherry_pick_commits() {
+          local label="$1"
+          local commit
+          shift
+
+          if [ "$#" -eq 0 ]; then
+            echo "No commits to cherry-pick from ${label}."
+            return
+          fi
+
+          echo "Cherry-picking $# commit(s) from ${label} onto qcom-next"
+          for commit in "$@"; do
+            if ! git cherry-pick "${commit}"; then
+              if git diff --quiet && git diff --cached --quiet; then
+                echo "Skipping empty cherry-pick for ${commit} from ${label}"
+                git cherry-pick --skip
+              else
+                echo "ERROR: cherry-pick failed for ${commit} from ${label}" >&2
+                exit 1
+              fi
+            fi
+          done
+        }
+
+        cherry_pick_pr() {
+          local pr="$1"
+          mapfile -t commits < <(get_pr_commits "${pr}")
+
+          if [ "${#commits[@]}" -eq 0 ]; then
+            echo "ERROR: no commits found to cherry-pick from kernel-topics PR #${pr}" >&2
+            exit 1
+          fi
+
+          git fetch "https://x-access-token:${GH_TOKEN}@github.com/qualcomm-linux/kernel-topics.git" \
+            "pull/${pr}/head:pr-${pr}"
+
+          cherry_pick_commits "kernel-topics PR #${pr}" "${commits[@]}"
+        }
+
+        apply_topic_branch_delta() {
+          local base_ref="$1"
+          local upstream_tag
+
+          git remote add kernel-topics \
+            "https://x-access-token:${GH_TOKEN}@github.com/qualcomm-linux/kernel-topics.git"
+          git fetch --no-tags kernel-topics \
+            "refs/heads/${base_ref}:refs/remotes/kernel-topics/${base_ref}"
+          git fetch --force kernel-topics '+refs/tags/v*:refs/tags/v*'
+
+          upstream_tag="$(git describe --tags --match 'v[0-9]*' --abbrev=0 "refs/remotes/kernel-topics/${base_ref}" 2>/dev/null || true)"
+          if [ -z "${upstream_tag}" ]; then
+            echo "ERROR: could not determine upstream v* tag for kernel-topics branch ${base_ref}" >&2
+            exit 1
+          fi
+
+          mapfile -t topic_commits < <(
+            git rev-list --reverse --no-merges \
+              "${upstream_tag}..refs/remotes/kernel-topics/${base_ref}"
+          )
+
+          echo "PR base branch ${base_ref} is based on upstream tag ${upstream_tag}."
+          cherry_pick_commits "kernel-topics branch ${base_ref} after ${upstream_tag}" "${topic_commits[@]}"
+        }
+
+        get_pr_dependencies() {
+          local pr="$1"
+          local pr_json
+
+          pr_json="$(api_get "https://api.github.com/repos/qualcomm-linux/kernel-topics/pulls/${pr}")"
+          jq -r '.body // ""' <<< "${pr_json}" \
+          | awk 'BEGIN { IGNORECASE=1 } /^Depends-on:/ { sub(/^Depends-on:[[:space:]]*/, ""); print }' \
+          | tr ', \t\r' '\n' \
+          | sed -nE \
+              -e 's|^#([0-9]+)$|\1|p' \
+              -e 's#^([0-9]+)$#\1#p' \
+              -e 's#^https?://github.com/qualcomm-linux/kernel-topics/pull/([0-9]+).*#\1#p' \
+              -e 's#^.*/pull/([0-9]+).*#\1#p' \
+          | awk 'seen[$0]++ == 0'
+        }
+
+        target_pr="${{ inputs.pr_number }}"
+        target_pr_json="$(api_get "https://api.github.com/repos/qualcomm-linux/kernel-topics/pulls/${target_pr}")"
+        target_base_ref="$(jq -r '.base.ref // empty' <<< "${target_pr_json}")"
+        if [ -z "${target_base_ref}" ]; then
+          echo "ERROR: could not determine base branch for kernel-topics PR #${target_pr}" >&2
           exit 1
         fi
 
-        echo "Cherry-picking ${#commits[@]} commit(s) from kernel-topics PR #${{ inputs.pr_number }} onto qcom-next"
-        git cherry-pick "${commits[@]}"
+        apply_topic_branch_delta "${target_base_ref}"
+
+        declare -A pr_state
+        apply_pr_with_dependencies() {
+          local pr="$1"
+          local dependency_pr
+
+          if [ "${pr_state[$pr]:-}" = "done" ]; then
+            return
+          fi
+          if [ "${pr_state[$pr]:-}" = "visiting" ]; then
+            echo "ERROR: circular Depends-on chain detected at kernel-topics PR #${pr}" >&2
+            exit 1
+          fi
+
+          pr_state[$pr]=visiting
+          mapfile -t dependency_prs < <(get_pr_dependencies "${pr}")
+          for dependency_pr in "${dependency_prs[@]}"; do
+            echo "Applying dependency PR #${dependency_pr} before PR #${pr}"
+            apply_pr_with_dependencies "${dependency_pr}"
+          done
+
+          cherry_pick_pr "${pr}"
+          pr_state[$pr]=done
+        }
+
+        apply_pr_with_dependencies "${target_pr}"
 
     - name: Fetch PR
       if: inputs.repo == 'qualcomm-linux/kernel'
