@@ -76,8 +76,8 @@ schema_version: 1
 base:
   repo: "https://github.com/qualcomm-linux-stg/kernel.git"
   branch: qcom-next-staging
-  tag: v7.2
-  sha: 8d3ae59288f1e7d58d76558a6ee96d533bc5019f
+  tag: null
+  sha: 93f51579e7df248780214094418f205253383cc5
 
 # open   = topic promotions may publish
 # frozen = RC uprev in progress; promotions may validate but not publish
