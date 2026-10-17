@@ -503,6 +503,81 @@ class Runner:
         self.check("in-tree config is structurally sound without --allow-untagged "
                    "(offline mode does not check tags)", rc == 0, out)
 
+    # --- bootstrap topic_SHA1 parsing ------------------------------------
+    def test_bootstrap_topic_sha1(self) -> None:
+        print("\n[bootstrap] topic_SHA1 table parsing")
+        bootstrap = os.path.join(HERE, "bootstrap_qcom_next_yaml.py")
+        if not os.path.exists(bootstrap):
+            print("  SKIP  bootstrap script not present")
+            return
+
+        sys.path.insert(0, HERE)
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("bootstrap_mod", bootstrap)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+        except Exception as exc:  # noqa: BLE001
+            self.check("bootstrap module imports", False, str(exc))
+            return
+        self.check("bootstrap module imports", True)
+
+        # The real table is fixed-width with a header and a rule line, and at
+        # least one row is tab separated rather than space padded.
+        table = (
+            "Name                                  SHA                                  Commits\n"
+            "------------------------------------------------------------------------------------\n"
+            "tech/bsp/clk              " + "b" * 40 + "         14\n"
+            "tech/bsp/devfreq          " + "c" * 40 + "          7\n"
+            "tech/mem/dma-buf\t\t  " + "d" * 40 + "\t\t\t1\n"
+        )
+        path = self.write_raw("topic_SHA1", table)
+        parsed = mod.load_topic_sha1(path)
+
+        self.check("parses three data rows", len(parsed) == 3, str(parsed))
+        self.check("skips the header and rule lines",
+                   "Name" not in parsed and "---" not in str(list(parsed)))
+        self.check("reads a space-padded row",
+                   parsed.get("tech/bsp/clk", ("",))[0] == "b" * 40, str(parsed))
+        self.check("reads a tab-separated row",
+                   parsed.get("tech/mem/dma-buf", ("",))[0] == "d" * 40, str(parsed))
+        self.check("captures the commit count",
+                   parsed.get("tech/bsp/clk", ("", ""))[1] == "14", str(parsed))
+
+        # A row whose second field is not a SHA must be ignored, not guessed at.
+        bad = self.write_raw("topic_SHA1_bad",
+                             "Name  SHA  Commits\n"
+                             "tech/x  not-a-sha  3\n"
+                             "tech/y  " + "e" * 40 + "  1\n")
+        parsed = mod.load_topic_sha1(bad)
+        self.check("ignores rows without a valid sha",
+                   list(parsed) == ["tech/y"], str(parsed))
+
+        # An empty or header-only table is an error, not a silent empty config.
+        empty = self.write_raw("topic_SHA1_empty", "Name  SHA  Commits\n-----\n")
+        try:
+            mod.load_topic_sha1(empty)
+            self.check("rejects a table with no data rows", False)
+        except mod.BootstrapError:
+            self.check("rejects a table with no data rows", True)
+
+        # Conflicting SHAs for one topic must not be silently resolved.
+        conflict = self.write_raw("topic_SHA1_conflict",
+                                  "tech/z  " + "a" * 40 + "  1\n"
+                                  "tech/z  " + "b" * 40 + "  2\n")
+        try:
+            mod.load_topic_sha1(conflict)
+            self.check("rejects conflicting SHAs for one topic", False)
+        except mod.BootstrapError:
+            self.check("rejects conflicting SHAs for one topic", True)
+
+        # pick_tag must not adopt another topic's tag (regression guard).
+        self.check("pick_tag ignores a foreign topic's tag",
+                   mod.pick_tag(["tech/other-7.3-rc6-20261001"], "tech/bsp/clk") is None)
+        self.check("pick_tag accepts the topic's own tag",
+                   mod.pick_tag(["tech/bsp/clk-7.3-rc6-20261001"], "tech/bsp/clk")
+                   == "tech/bsp/clk-7.3-rc6-20261001")
+
     # --- entry ------------------------------------------------------------
     def run(self) -> int:
         print("qcom-next config self-tests")
@@ -522,6 +597,7 @@ class Runner:
         self.test_validator()
         self.test_classifier()
         self.test_classifier_git()
+        self.test_bootstrap_topic_sha1()
         self.test_real_config()
 
         total = self.passed + len(self.failed)

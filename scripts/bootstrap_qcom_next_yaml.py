@@ -2,25 +2,41 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Bootstrap qcom-next.yaml from the legacy flat qcom-next.conf.
 
-This is a one-shot migration helper for Phase 2 of the kernel topic promotion
-flow. It reads the legacy three-column conf consumed by automerge's ci-merge::
+This is a one-shot migration helper for the kernel topic promotion flow. It
+reads the legacy three-column conf consumed by automerge's ci-merge::
 
     <name> <url> <branch>
 
-resolves the current tip SHA of every branch from its remote, discovers any
-existing tag that already points at that tip, and emits the SHA-pinned
-``qcom-next.yaml`` that becomes the single reviewed source of truth.
+and emits the SHA-pinned ``qcom-next.yaml`` that becomes the single reviewed
+source of truth.
 
-After the initial migration, ``qcom-next.yaml`` is edited by maintainers through
-pull requests; this script is not part of the normal promotion flow. It is kept
-in-tree so the migration is reproducible and auditable.
+Where the pinned SHAs come from
+-------------------------------
+By default each branch's current tip is captured, which pins "whatever is live
+right now". That is rarely what you want for a first migration.
+
+With ``--topic-sha1`` the SHAs are instead read from the ``topic_SHA1`` table
+that automerge publishes alongside a generated qcom-next, so the config
+describes the integration state that was actually built and tested. Topics
+absent from that table merged nothing on that run ("Already up to date"), and
+fall back to their branch tip; they are listed in the generated header.
+
+The baseline is configurable with ``--baseline-repo``, ``--baseline-ref`` and
+``--baseline-sha``, because the repository that should supply the baseline is
+not always the one the legacy conf names.
+
+After the initial migration, ``qcom-next.yaml`` is edited by maintainers
+through pull requests; this script is not part of the normal promotion flow. It
+is kept in-tree so the migration is reproducible and auditable.
 
 Usage::
 
     scripts/bootstrap_qcom_next_yaml.py \\
         --conf qcom-next.conf \\
         --output qcom-next.yaml \\
-        --base-tag v7.3-rc1
+        --topic-sha1 https://raw.githubusercontent.com/qualcomm-linux/kernel/qcom-next/qcom-next/topic_SHA1 \\
+        --baseline-repo https://github.com/qualcomm-linux-stg/kernel.git \\
+        --baseline-ref qcom-next-staging
 
 Network access to every configured remote is required unless --dry-run is used.
 """
@@ -170,6 +186,69 @@ def pick_tag(candidates: List[str], branch: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# topic_SHA1 parsing
+# ---------------------------------------------------------------------------
+def load_topic_sha1(source: str) -> Dict[str, Tuple[str, str]]:
+    """Parse automerge's topic_SHA1 table into {name: (sha, commit_count)}.
+
+    The file is produced by automerge's log-parser.sh as a fixed-width table::
+
+        Name                    SHA                  Commits
+        ------------------------------------------------------------
+        tech/bsp/clk            b66215330527...      14
+
+    Column widths are not reliable - some rows are tab separated - so fields are
+    split on arbitrary whitespace rather than by offset. Only rows whose second
+    field is a full SHA are accepted, which skips the header and rule lines
+    without having to recognise them.
+    """
+    if source.startswith(("http://", "https://")):
+        import urllib.error
+        import urllib.request
+        try:
+            with urllib.request.urlopen(source, timeout=120) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.URLError as exc:
+            raise BootstrapError(f"cannot fetch {source}: {exc}")
+    else:
+        try:
+            with open(source, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError as exc:
+            raise BootstrapError(f"cannot read {source}: {exc}")
+
+    out: Dict[str, Tuple[str, str]] = {}
+    skipped: List[str] = []
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        fields = line.split()
+        if len(fields) < 2 or not SHA_RE.match(fields[1]):
+            skipped.append(f"{lineno}: {line[:70]}")
+            continue
+        name = fields[0]
+        sha = fields[1]
+        commits = fields[2] if len(fields) > 2 else ""
+        if name in out and out[name][0] != sha:
+            raise BootstrapError(
+                f"{source}:{lineno}: conflicting SHAs for {name!r} "
+                f"({out[name][0]} then {sha})"
+            )
+        out[name] = (sha, commits)
+
+    if not out:
+        raise BootstrapError(f"{source}: no usable rows found")
+
+    sys.stderr.write(f"parsed {len(out)} entries from {source}\n")
+    if skipped:
+        sys.stderr.write(
+            f"  ignored {len(skipped)} non-data line(s) (header/rule/malformed)\n"
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------
 # YAML emission (hand-rendered for comments + stable minimal diffs)
 # ---------------------------------------------------------------------------
 def _scalar(value) -> str:
@@ -191,7 +270,10 @@ def _scalar(value) -> str:
 def render_yaml(base: dict, topics: List[dict], promotion_state: str,
                 rerere_repo: str, rerere_ref: str, rerere_sha: Optional[str],
                 source_conf: str, untagged: List[str],
-                dropped: Optional[List[dict]] = None) -> str:
+                dropped: Optional[List[dict]] = None,
+                topic_sha1_source: Optional[str] = None,
+                from_recorded: Optional[List[str]] = None,
+                from_tip: Optional[List[str]] = None) -> str:
     today = _dt.date.today().isoformat()
     out: List[str] = []
     a = out.append
@@ -217,8 +299,25 @@ def render_yaml(base: dict, topics: List[dict], promotion_state: str,
     a("# schemas/qcom-next.schema.json.")
     a("#")
     a(f"# Bootstrapped from {source_conf} on {today} by")
-    a("# scripts/bootstrap_qcom_next_yaml.py (branch tips captured as the initial")
-    a("# pinned SHAs).")
+    a("# scripts/bootstrap_qcom_next_yaml.py.")
+    if topic_sha1_source:
+        a("#")
+        a("# Topic SHAs were taken from the automerge topic_SHA1 table at")
+        a(f"#   {topic_sha1_source}")
+        a("# so this config describes an integration state that was actually")
+        a(f"# built, rather than whatever the branch tips happened to be.")
+        if from_recorded:
+            a(f"# {len(from_recorded)} topic(s) pinned from that table.")
+        if from_tip:
+            a(f"#")
+            a(f"# {len(from_tip)} topic(s) are absent from the table: that run merged")
+            a("# nothing for them, meaning their content was already in the baseline.")
+            a("# They are pinned to their branch tip instead, so if a tip has moved")
+            a("# since, the generated tree will include that newer content:")
+            for name in from_tip:
+                a(f"#   - {name}")
+    else:
+        a("# Branch tips were captured as the initial pinned SHAs.")
     if dropped:
         a("#")
         a(f"# REMOVED during bootstrap: {len(dropped)} topic(s) listed in the legacy conf")
@@ -288,6 +387,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="row name ci-merge treats as the baseline (default: %(default)s)")
     ap.add_argument("--base-tag", default=None,
                     help="upstream tag/RC label for the baseline, e.g. v7.3-rc1")
+    ap.add_argument("--baseline-repo", default=None,
+                    help="override the baseline repository URL from the conf")
+    ap.add_argument("--baseline-ref", default=None,
+                    help="override the baseline branch from the conf")
+    ap.add_argument("--baseline-sha", default=None,
+                    help="pin the baseline to this commit instead of resolving "
+                         "the branch tip")
+    ap.add_argument("--topic-sha1", default=None, metavar="PATH_OR_URL",
+                    help="read pinned topic SHAs from an automerge topic_SHA1 "
+                         "table instead of using current branch tips")
+    ap.add_argument("--require-topic-sha1", action="store_true",
+                    help="fail if a configured topic is absent from the "
+                         "topic_SHA1 table, instead of falling back to its tip")
     ap.add_argument("--promotion-state", default="open", choices=["open", "frozen"],
                     help="initial promotion state (default: %(default)s)")
     ap.add_argument("--rerere-repo", default=DEFAULT_RERERE_REPO,
@@ -317,10 +429,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"({baseline['branch']}), {len(topics)} topics\n"
     )
 
+    # Baseline overrides. The repository that should supply the baseline is not
+    # always the one the legacy conf names, so allow it to be redirected.
+    if args.baseline_repo:
+        sys.stderr.write(
+            f"baseline repo overridden: {baseline['repo']} -> {args.baseline_repo}\n"
+        )
+        baseline["repo"] = args.baseline_repo
+    if args.baseline_ref:
+        sys.stderr.write(
+            f"baseline ref overridden: {baseline['branch']} -> {args.baseline_ref}\n"
+        )
+        baseline["branch"] = args.baseline_ref
+    if args.baseline_sha and not SHA_RE.match(args.baseline_sha):
+        sys.stderr.write(
+            f"error: --baseline-sha must be a full 40-hex lowercase sha: "
+            f"{args.baseline_sha!r}\n"
+        )
+        return 2
+
     if args.dry_run:
         for t in topics:
             print(f"{t['name']}\t{t['branch']}\t{t['repo']}")
         return 0
+
+    # Pinned topic SHAs from a recorded integration, if requested.
+    recorded: Dict[str, Tuple[str, str]] = {}
+    if args.topic_sha1:
+        try:
+            recorded = load_topic_sha1(args.topic_sha1)
+        except BootstrapError as exc:
+            sys.stderr.write(f"error: {exc}\n")
+            return 2
+        configured = {t["name"] for t in topics}
+        unknown = sorted(set(recorded) - configured)
+        if unknown:
+            sys.stderr.write(
+                f"warning: {len(unknown)} entry(ies) in the topic_SHA1 table are not "
+                f"in {args.conf} and will be ignored:\n"
+            )
+            for name in unknown:
+                sys.stderr.write(f"  + {name}\n")
 
     repos = list(OrderedDict.fromkeys([baseline["repo"]] + [t["repo"] for t in topics]))
     sys.stderr.write(f"resolving {len(repos)} remote(s)\n")
@@ -332,21 +481,41 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # baseline
     bheads = maps[baseline["repo"]]["heads"]
-    if baseline["branch"] not in bheads:
-        sys.stderr.write(
-            f"error: baseline branch {baseline['branch']!r} not found in {baseline['repo']}\n"
-        )
-        return 2
+    if args.baseline_sha:
+        base_sha = args.baseline_sha
+    else:
+        if baseline["branch"] not in bheads:
+            sys.stderr.write(
+                f"error: baseline branch {baseline['branch']!r} not found in "
+                f"{baseline['repo']}\n"
+            )
+            return 2
+        base_sha = bheads[baseline["branch"]]
+
+    base_tag = args.base_tag
+    if base_tag is None and not args.no_tags:
+        # A baseline is normally an upstream release tag; adopt it when one
+        # points exactly at the pinned commit so the config records it.
+        for cand in sorted(maps[baseline["repo"]]["tag_by_sha"].get(base_sha, [])):
+            base_tag = cand
+            break
+        if base_tag:
+            sys.stderr.write(f"baseline tag discovered: {base_tag}\n")
+
     base_out = {
         "repo": baseline["repo"],
         "branch": baseline["branch"],
-        "tag": args.base_tag,
-        "sha": bheads[baseline["branch"]],
+        "tag": base_tag,
+        "sha": base_sha,
     }
 
     # topics
     missing: List[dict] = []
     untagged: List[str] = []
+    from_recorded: List[str] = []
+    from_tip: List[str] = []
+    unreachable_recorded: List[str] = []
+
     for t in topics:
         heads = maps[t["repo"]]["heads"]
         if t["branch"] not in heads:
@@ -354,7 +523,22 @@ def main(argv: Optional[List[str]] = None) -> int:
             t["sha"] = None
             t["tag"] = None
             continue
-        sha = heads[t["branch"]]
+
+        tip = heads[t["branch"]]
+        sha = tip
+        if recorded:
+            entry = recorded.get(t["name"])
+            if entry:
+                sha = entry[0]
+                from_recorded.append(t["name"])
+            else:
+                # Absent from the table means that run merged nothing for this
+                # topic, so its content was already in the baseline. The tip is
+                # the only sensible pin available from here.
+                from_tip.append(t["name"])
+                if args.require_topic_sha1:
+                    unreachable_recorded.append(t["name"])
+
         t["sha"] = sha
         tag = None if args.no_tags else pick_tag(
             maps[t["repo"]]["tag_by_sha"].get(sha, []), t["branch"]
@@ -362,6 +546,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         t["tag"] = tag
         if tag is None:
             untagged.append(t["name"])
+
+    if unreachable_recorded:
+        sys.stderr.write(
+            f"error: --require-topic-sha1 given but {len(unreachable_recorded)} "
+            "topic(s) are absent from the table:\n"
+        )
+        for name in unreachable_recorded:
+            sys.stderr.write(f"  - {name}\n")
+        return 2
 
     if missing:
         sys.stderr.write("\ntopic branches not found on their remotes:\n")
@@ -406,6 +599,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         base_out, topics, args.promotion_state,
         args.rerere_repo, args.rerere_ref, rerere_sha,
         args.conf, untagged, missing if args.skip_missing else None,
+        topic_sha1_source=args.topic_sha1,
+        from_recorded=from_recorded,
+        from_tip=from_tip,
     )
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(text)
@@ -415,10 +611,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"\nwrote {args.output}\n"
         f"  base      : {base_out['branch']} @ {base_out['sha'][:12]}"
         f" (tag: {base_out['tag'] or 'null'})\n"
+        f"  base repo : {base_out['repo']}\n"
         f"  topics    : {len(topics)}\n"
         f"  tagged    : {tagged}\n"
         f"  untagged  : {len(untagged)}\n"
     )
+    if args.topic_sha1:
+        sys.stderr.write(
+            f"  pinned from topic_SHA1 : {len(from_recorded)}\n"
+            f"  pinned from branch tip : {len(from_tip)}\n"
+        )
+        if from_tip:
+            sys.stderr.write(
+                "  topics absent from the table (pinned to tip):\n"
+            )
+            for name in from_tip:
+                sys.stderr.write(f"    - {name}\n")
     if untagged:
         sys.stderr.write(
             "  topics needing a tag before promotion:\n"
