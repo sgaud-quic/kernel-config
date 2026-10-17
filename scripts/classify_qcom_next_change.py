@@ -50,11 +50,22 @@ CLASS_ATOMIC = "atomic-topic-promotion"
 CLASS_METADATA = "metadata-only"
 CLASS_RERERE = "rerere-only"
 CLASS_NO_CHANGE = "no-change"
+CLASS_INITIAL = "initial-import"
 CLASS_INVALID = "invalid-mixed-change"
 
 
 class ClassifyError(RuntimeError):
     pass
+
+
+class BaseConfigAbsent(ClassifyError):
+    """The config does not exist at the base revision.
+
+    Expected for the change that first introduces qcom-next.yaml, and for a
+    manual run against a branch that predates it. Distinguished from a genuine
+    read failure so the caller can treat it as an initial import rather than an
+    error.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -85,16 +96,38 @@ def load_config_file(path: str) -> dict:
     return data
 
 
-def load_config_from_git(ref: str, path: str, repo_dir: str = ".") -> dict:
-    """Read `path` at `ref` via `git show`, for comparing against a base branch."""
-    yaml = _yaml()
-    cmd = ["git", "-C", repo_dir, "show", f"{ref}:{path}"]
+def _git(repo_dir: str, *args: str, timeout: int = 120) -> subprocess.CompletedProcess:
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, check=False)
+        return subprocess.run(
+            ["git", "-C", repo_dir, *args],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
     except subprocess.TimeoutExpired:
-        raise ClassifyError(f"git show {ref}:{path} timed out")
+        raise ClassifyError(f"git {' '.join(args)} timed out")
     except OSError as exc:
         raise ClassifyError(f"cannot execute git: {exc}")
+
+
+def load_config_from_git(ref: str, path: str, repo_dir: str = ".") -> dict:
+    """Read `path` at `ref` via `git show`, for comparing against a base branch.
+
+    Existence is probed with plumbing rather than by matching git's stderr,
+    which is locale dependent. An unresolvable ref is an error; a resolvable ref
+    that simply has no such path raises BaseConfigAbsent, because that is the
+    normal state before qcom-next.yaml is first merged.
+    """
+    yaml = _yaml()
+
+    if _git(repo_dir, "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}").returncode != 0:
+        raise ClassifyError(
+            f"base ref {ref!r} cannot be resolved in {repo_dir}. "
+            "Fetch it first, or pass --base-file instead."
+        )
+
+    if _git(repo_dir, "cat-file", "-e", f"{ref}:{path}").returncode != 0:
+        raise BaseConfigAbsent(f"{path} does not exist at {ref}")
+
+    proc = _git(repo_dir, "show", f"{ref}:{path}")
     if proc.returncode != 0:
         tail = proc.stderr.strip().splitlines()
         raise ClassifyError(
@@ -297,10 +330,28 @@ def _components(adj: Dict[str, Set[str]], nodes: Set[str]) -> List[Set[str]]:
 # ---------------------------------------------------------------------------
 # classification
 # ---------------------------------------------------------------------------
-def classify(diff: Diff, allow_atomic_override: bool) -> Tuple[str, List[str], List[str]]:
+def classify(diff: Diff, allow_atomic_override: bool,
+             base_absent: bool = False) -> Tuple[str, List[str], List[str]]:
     """Return (classification, reasons, blocking_errors)."""
     reasons: List[str] = []
     errors: List[str] = []
+
+    if base_absent:
+        # Nothing to diff against. Every topic is new and the base block is new,
+        # which the V6 scope rule below would otherwise read as a base+topic
+        # change and reject. Classify it explicitly instead: the tree still has
+        # to be generated and must still pass the full gates.
+        topics = topic_order(diff.head)
+        base = diff.head.get("base") or {}
+        reasons.append(
+            f"config does not exist at the base revision: initial import of "
+            f"{len(topics)} topic(s)"
+        )
+        reasons.append(
+            f"baseline {base.get('branch', '?')} @ "
+            f"{_short(base.get('sha'))} (tag {base.get('tag') or 'none'})"
+        )
+        return CLASS_INITIAL, reasons, errors
 
     if not diff.any_change:
         return CLASS_NO_CHANGE, ["no difference between base and head config"], []
@@ -460,7 +511,11 @@ def check_freeze(diff: Diff, classification: str) -> Tuple[bool, List[str]]:
 
     if diff.promotion_state_change:
         old, new = diff.promotion_state_change
-        if classification == CLASS_RC_UPREV:
+        if classification == CLASS_INITIAL:
+            # There is no previous state to have changed; the field simply did
+            # not exist before. Not worth reporting as a transition.
+            pass
+        elif classification == CLASS_RC_UPREV:
             notes.append(f"promotion_state {old!r} -> {new!r} as part of the RC uprev flow")
         else:
             notes.append(
@@ -477,6 +532,7 @@ GATE_PROFILE = {
     CLASS_RC_UPREV: "full (build, boot, functional, yocto, overlay, ubuntu)",
     CLASS_ATOMIC: "full (build, boot, functional, yocto, overlay, ubuntu)",
     CLASS_TOPIC: "full (build, boot, functional, yocto, overlay, ubuntu)",
+    CLASS_INITIAL: "full (build, boot, functional, yocto, overlay, ubuntu)",
     CLASS_RERERE: "full - a rerere change alters conflict resolution, so the tree must be retested",
     CLASS_METADATA: "validation only - generated tree content is unchanged",
     CLASS_NO_CHANGE: "none",
@@ -568,13 +624,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         sys.stderr.write("error: one of --base-ref or --base-file is required\n")
         return 2
 
+    base_absent = False
     try:
         if args.base_file:
             base_cfg = load_config_file(args.base_file)
             base_label = args.base_file
         else:
-            base_cfg = load_config_from_git(args.base_ref, args.config, args.repo_dir)
-            base_label = f"{args.base_ref}:{args.config}"
+            try:
+                base_cfg = load_config_from_git(args.base_ref, args.config, args.repo_dir)
+                base_label = f"{args.base_ref}:{args.config}"
+            except BaseConfigAbsent as exc:
+                # First introduction of the config, or a manual run against a
+                # branch that predates it. Not an error.
+                sys.stderr.write(f"note: {exc}; treating this as an initial import\n")
+                base_cfg = {}
+                base_absent = True
+                base_label = f"{args.base_ref}:{args.config} (absent)"
 
         head_path = args.head_file or os.path.join(args.repo_dir, args.config)
         head_cfg = load_config_file(head_path)
@@ -584,7 +649,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     diff = Diff(base_cfg, head_cfg)
-    classification, reasons, errors = classify(diff, args.allow_atomic_override)
+    classification, reasons, errors = classify(
+        diff, args.allow_atomic_override, base_absent=base_absent
+    )
     publish_allowed, notes = check_freeze(diff, classification)
 
     blocked = bool(errors) or (not publish_allowed and not args.ignore_freeze)

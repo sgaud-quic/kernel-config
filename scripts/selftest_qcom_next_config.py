@@ -488,6 +488,53 @@ class Runner:
         )
         self.check("unknown git ref is a usage error", p.returncode == 2, p.stdout + p.stderr)
 
+        # The config not existing at the base revision is the normal state for
+        # the change that first introduces it, and must not be an error.
+        empty = os.path.join(self.tmp, "gitrepo-empty")
+        os.makedirs(empty, exist_ok=True)
+        subprocess.run(["git", "-C", empty, "init", "-q"], timeout=60)
+        for k, v in (("user.email", "selftest@example.com"),
+                     ("user.name", "selftest"),
+                     ("commit.gpgsign", "false")):
+            subprocess.run(["git", "-C", empty, "config", k, v], timeout=60)
+        with open(os.path.join(empty, "README"), "w", encoding="utf-8") as fh:
+            fh.write("no config here yet\n")
+        subprocess.run(["git", "-C", empty, "add", "README"], timeout=60)
+        r = subprocess.run(["git", "-C", empty, "commit", "-q", "-m", "pre-config"],
+                           capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            self.check("initial-import fixture commits", False, r.stdout + r.stderr)
+        else:
+            base_rev = subprocess.run(
+                ["git", "-C", empty, "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=60).stdout.strip()
+            with open(os.path.join(empty, "qcom-next.yaml"), "w", encoding="utf-8") as fh:
+                yaml.safe_dump(BASELINE_CONFIG, fh, default_flow_style=False,
+                               sort_keys=False)
+            p = subprocess.run(
+                [sys.executable, CLASSIFIER, "--base-ref", base_rev,
+                 "--config", "qcom-next.yaml", "--repo-dir", empty,
+                 "--format", "json"],
+                capture_output=True, text=True, timeout=120,
+            )
+            try:
+                d = json.loads(p.stdout)
+            except json.JSONDecodeError:
+                d = {}
+            self.check("absent base config is not an error",
+                       p.returncode == 0, p.stdout + p.stderr)
+            self.check("absent base config classifies as initial-import",
+                       d.get("classification") == "initial-import", json.dumps(d))
+            self.check("initial-import requires the full gates",
+                       "full" in (d.get("required_gates") or ""), json.dumps(d))
+            self.check("initial-import lists every topic as added",
+                       len(d.get("added_topics") or []) == len(BASELINE_CONFIG["topics"]),
+                       json.dumps(d))
+            self.check("initial-import is not reported as invalid-mixed-change",
+                       d.get("classification") != "invalid-mixed-change", json.dumps(d))
+            self.check("initial-import allows publication",
+                       d.get("publish_allowed") is True, json.dumps(d))
+
     # --- real repo config -------------------------------------------------
     def test_real_config(self) -> None:
         print("\n[integration] the in-tree qcom-next.yaml")
