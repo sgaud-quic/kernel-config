@@ -13,6 +13,18 @@
 # (qualcomm-linux-stg/kernel by default) so the flow can be exercised without
 # touching production refs.
 #
+# How to trigger this
+# -------------------
+# Pull request (works straight away): open a PR that touches qcom-next.yaml or
+# scripts/**. The pull_request event runs this workflow from the PR branch, so
+# it does not need to exist on the default branch first.
+#
+# Actions UI / workflow_dispatch: GitHub only shows a "Run workflow" button for
+# a workflow that exists on the **default branch**, and the dispatch API can
+# only find it there. Until this file is merged to the default branch, use the
+# pull request route. Once merged, the UI lets you pick which branch to run
+# from, and that branch's copy of this file is the one that executes.
+#
 # Prerequisites that live outside this file:
 #
 #   * SPAT must be able to push branches to the candidate repository and post
@@ -22,8 +34,7 @@
 #     call internally are still resolved at @main inside build.yml and
 #     test.yml; fully un-pinning those needs build.yml restructured to keep
 #     kernel-config in a subdirectory, because the sync action replaces the
-#     workspace with the kernel tree. Until then, run with gates=none to
-#     exercise generation and the candidate push on their own.
+#     workspace with the kernel tree. Gates therefore default to "none".
 name: qcom-next config PR CI
 
 on:
@@ -50,7 +61,7 @@ on:
       gates:
         description: "Gates to run: all, pre-merge, yocto, ubuntu, none"
         type: string
-        default: pre-merge
+        default: none
         required: false
       allow_untagged:
         description: Downgrade missing-tag errors to warnings (migration only)
@@ -232,9 +243,14 @@ jobs:
   gates:
     name: Run gates on the candidate
     needs: [validate, candidate]
+    # Gates default to "none", including for pull_request runs where no input
+    # exists. That is deliberate for the migration: the gates resolve their
+    # composite actions at @main (see the header), so they cannot yet test a
+    # candidate in a staging repo. Opt in explicitly with
+    # -f gates=pre-merge|all once that is resolved, then make it the default.
     if: >-
       needs.candidate.result == 'success' &&
-      (inputs.gates == null || inputs.gates != 'none')
+      (inputs.gates || 'none') != 'none'
     runs-on: ubuntu-latest
     outputs:
       result: ${{ steps.gates.outcome }}
@@ -245,7 +261,7 @@ jobs:
       - name: Resolve the gate list
         id: list
         env:
-          REQUESTED: ${{ inputs.gates || 'pre-merge' }}
+          REQUESTED: ${{ inputs.gates || 'none' }}
           CLASSIFICATION: ${{ needs.validate.outputs.classification }}
         run: |
           set -euo pipefail

@@ -187,7 +187,22 @@ def main(argv: Optional[List[str]] = None) -> int:
          "no push token available" in raw)
 
     t.ok("gates are skipped when requested",
-         "inputs.gates != 'none'" in raw or 'gates == \'none\'' in raw)
+         "(inputs.gates || 'none') != 'none'" in raw, raw[:0])
+
+    # Gates must default to off, including on pull_request runs where no input
+    # exists, until the composite-action pinning is resolved.
+    gates_if = str(jobs.get("gates", {}).get("if", ""))
+    t.ok("gates default to none when no input is supplied",
+         "|| 'none'" in gates_if, gates_if)
+    dispatch_gates_default = (
+        (triggers(pr_ci).get("workflow_dispatch", {}) or {})
+        .get("inputs", {}).get("gates", {}).get("default")
+    )
+    t.ok("dispatch input for gates defaults to none",
+         dispatch_gates_default == "none", str(dispatch_gates_default))
+
+    t.ok("header documents how to trigger from the Actions UI",
+         "default branch" in raw and "pull_request event runs this workflow" in raw)
 
     t.ok("final-status treats skipped gates as acceptable",
          "success|skipped" in raw)
