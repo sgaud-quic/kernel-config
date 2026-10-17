@@ -20,15 +20,12 @@ on:
     paths:
       - qcom-next.yaml
       - schemas/qcom-next.schema.json
-      - scripts/validate_qcom_next_config.py
-      - scripts/classify_qcom_next_change.py
-      - scripts/selftest_qcom_next_config.py
-      - scripts/qcom_next_config.py
-      - scripts/generate_qcom_next_tree.sh
-      - scripts/check_tested_tree_matches.sh
-      - scripts/selftest_qcom_next_generate.sh
+      - scripts/**
       - topic_maintainers.json
+      - .github/actions/sync/action.yml
       - .github/workflows/validate-qcom-next-config.yml
+      - .github/workflows/qcom-next-pr-ci.yml
+      - .github/workflows/prune-qcom-next-candidates.yml
   workflow_dispatch:
     inputs:
       base_ref:
@@ -130,6 +127,12 @@ jobs:
         # Guards the validator and classifier themselves. A broken rule engine
         # would otherwise silently pass every config.
         run: python scripts/selftest_qcom_next_config.py
+
+      - name: Run CI wiring self-tests
+        # Static checks on the Phase 3 workflow graph, the sync action's repo
+        # handling, and the gate status contract. GitHub Actions cannot be run
+        # here, so these catch the structural breakages instead.
+        run: python scripts/selftest_qcom_next_ci.py
 
       - name: Validate config (V1-V5, V8)
         id: validate

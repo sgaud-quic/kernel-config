@@ -1,0 +1,434 @@
+---
+# Phase 3 of the kernel topic promotion flow.
+#
+# End-to-end CI for a change to the SHA-pinned qcom-next configuration:
+#
+#   validate + classify  ->  generate candidate tree  ->  push candidate ref
+#   ->  run the kernel/Yocto/Ubuntu gates against it  ->  report on the PR
+#
+# The object under test is a generated candidate ref, not a pull request head.
+# qcom-next itself is never written here; publication is Phase 5.
+#
+# Candidate refs are pushed to a staging kernel repository
+# (qualcomm-linux-stg/kernel by default) so the flow can be exercised without
+# touching production refs.
+#
+# Prerequisites that live outside this file:
+#
+#   * CANDIDATE_PAT (or SPAT) must be able to push branches to the candidate
+#     repository and post commit statuses on it.
+#   * The gates reference composite actions at
+#     qualcomm-linux/kernel-config/.github/actions/...@main. The generalized
+#     sync action, which allows a non-production kernel repo to be checked out
+#     at an exact ref, therefore has to be on main before the gate stage can
+#     work against a staging repo. Until then, run with gates=none to exercise
+#     generation and the candidate push on their own.
+name: qcom-next config PR CI
+
+on:
+  pull_request:
+    branches: [main, ci-v2]
+    paths:
+      - qcom-next.yaml
+      - schemas/qcom-next.schema.json
+      - scripts/**
+      - topic_maintainers.json
+      - .github/workflows/qcom-next-pr-ci.yml
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to report against (0 for a manual run)
+        type: string
+        default: '0'
+        required: false
+      candidate_repo:
+        description: Repository to push the candidate ref to
+        type: string
+        default: qualcomm-linux-stg/kernel
+        required: false
+      gates:
+        description: "Gates to run: all, pre-merge, yocto, ubuntu, none"
+        type: string
+        default: pre-merge
+        required: false
+      allow_untagged:
+        description: Downgrade missing-tag errors to warnings (migration only)
+        type: boolean
+        default: true
+        required: false
+      keep_candidate:
+        description: Keep the candidate ref even if the run fails
+        type: boolean
+        default: false
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: qcom-next-pr-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CANDIDATE_REPO: ${{ inputs.candidate_repo || 'qualcomm-linux-stg/kernel' }}
+  TOPICS_REPO: qualcomm-linux/kernel-topics
+  AUTOMERGE_REPO: qualcomm-linux/automerge
+  INTEG_BRANCH: qcom-next
+
+jobs:
+  # ---------------------------------------------------------------- validate
+  validate:
+    name: Validate and classify
+    uses: ./.github/workflows/validate-qcom-next-config.yml
+    secrets: inherit
+    with:
+      allow_untagged: ${{ inputs.allow_untagged == null && true || inputs.allow_untagged }}
+
+  # ------------------------------------------------------- generate + push
+  candidate:
+    name: Generate and push candidate
+    needs: validate
+    # metadata-only and no-change leave the generated tree identical, so there
+    # is nothing to build and nothing to test.
+    if: >-
+      needs.validate.outputs.classification != 'metadata-only' &&
+      needs.validate.outputs.classification != 'no-change' &&
+      needs.validate.outputs.classification != 'invalid-mixed-change'
+    runs-on:
+      group: GHA-Kernel-SelfHosted-RG
+      labels: [self-hosted, kernel-prd-u2404-x64-large-od-ephem]
+    outputs:
+      candidate_ref: ${{ steps.push.outputs.candidate_ref }}
+      candidate_sha: ${{ steps.push.outputs.candidate_sha }}
+      digest: ${{ steps.generate.outputs.digest }}
+      topics_merged: ${{ steps.generate.outputs.topics_merged }}
+    steps:
+      - name: Checkout kernel-config
+        uses: actions/checkout@v4
+        with:
+          path: kernel-config
+          fetch-depth: 0
+
+      - name: Checkout automerge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.AUTOMERGE_REPO }}
+          path: automerge
+          token: ${{ secrets.SPAT || github.token }}
+
+      - name: Checkout kernel-topics
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.TOPICS_REPO }}
+          path: kernel-topics
+          # Full history and tags: pinned SHAs are frequently behind the branch
+          # tip, and a pin is only reachable through its tag once the topic has
+          # been rebased.
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ secrets.SPAT || github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet --upgrade pyyaml jsonschema
+
+      - name: Generate the candidate tree
+        id: generate
+        working-directory: kernel-config
+        run: |
+          set -euo pipefail
+          bash scripts/generate_qcom_next_tree.sh \
+              --config qcom-next.yaml \
+              --kernel-dir "$GITHUB_WORKSPACE/kernel-topics" \
+              --automerge "$GITHUB_WORKSPACE/automerge" \
+              --integ-branch "${INTEG_BRANCH}" \
+              --out-dir "$GITHUB_WORKSPACE/candidate" \
+              --verbose
+
+          out="$GITHUB_WORKSPACE/candidate"
+          digest=$(awk -F'\t' '$1=="digest" {print $2; exit}' "$out/tested-set.txt")
+          merged=$(awk -F'\t' '$4=="merged"' "$out/topic-shas.tsv" | grep -c . || true)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "topics_merged=${merged:-0}" >> "$GITHUB_OUTPUT"
+          echo "Tested-set digest: $digest"
+
+      - name: Push the candidate ref
+        id: push
+        env:
+          GH_PUSH_TOKEN: ${{ secrets.CANDIDATE_PAT || secrets.SPAT }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_PUSH_TOKEN:-}" ]; then
+            echo "::error title=qcom-next candidate::no push token available. Set CANDIDATE_PAT (or SPAT) with push access to ${CANDIDATE_REPO}."
+            exit 1
+          fi
+
+          pr_number='${{ github.event.pull_request.number || inputs.pr || 0 }}'
+          cd "$GITHUB_WORKSPACE/kernel-topics"
+          candidate_sha=$(git rev-parse "refs/heads/${INTEG_BRANCH}")
+          short=${candidate_sha:0:12}
+
+          # Keyed on the generated commit, so a re-run that produces identical
+          # content reuses the ref instead of accumulating new ones.
+          candidate_ref="qcom-next-candidate/pr-${pr_number}-${short}"
+
+          git remote remove candidate 2>/dev/null || true
+          git remote add candidate \
+              "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${CANDIDATE_REPO}.git"
+
+          echo "pushing ${INTEG_BRANCH} -> ${CANDIDATE_REPO}:${candidate_ref}"
+          git push --force candidate \
+              "refs/heads/${INTEG_BRANCH}:refs/heads/${candidate_ref}"
+
+          git remote remove candidate
+
+          echo "candidate_ref=$candidate_ref" >> "$GITHUB_OUTPUT"
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          echo "Candidate: ${CANDIDATE_REPO} @ ${candidate_ref} (${candidate_sha})"
+
+      - name: Upload candidate artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcom-next-candidate
+          path: |
+            candidate/merge.conf
+            candidate/merge.log
+            candidate/tested-set.txt
+            candidate/topic-shas.tsv
+            candidate/conflicts.txt
+            candidate/summary.md
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            if [ -f candidate/summary.md ]; then
+              cat candidate/summary.md
+            else
+              echo "### qcom-next candidate tree"
+              echo ""
+              echo "Generation did not produce a summary; see the job log."
+            fi
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Candidate repo | \`${CANDIDATE_REPO}\` |"
+            echo "| Candidate ref | \`${{ steps.push.outputs.candidate_ref || 'not pushed' }}\` |"
+            echo "| Candidate sha | \`${{ steps.push.outputs.candidate_sha || 'n/a' }}\` |"
+            echo "| Classification | \`${{ needs.validate.outputs.classification }}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------ gates
+  gates:
+    name: Run gates on the candidate
+    needs: [validate, candidate]
+    if: >-
+      needs.candidate.result == 'success' &&
+      (inputs.gates == null || inputs.gates != 'none')
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.gates.outcome }}
+    steps:
+      - name: Checkout kernel-config
+        uses: actions/checkout@v4
+
+      - name: Resolve the gate list
+        id: list
+        env:
+          REQUESTED: ${{ inputs.gates || 'pre-merge' }}
+          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
+        run: |
+          set -euo pipefail
+          case "$REQUESTED" in
+            all)  gates="pre-merge,yocto,ubuntu" ;;
+            none) gates="" ;;
+            *)    gates="$REQUESTED" ;;
+          esac
+          echo "gates=$gates" >> "$GITHUB_OUTPUT"
+          echo "classification=$CLASSIFICATION requires: ${{ needs.validate.outputs.required_gates }}"
+          echo "running gates: ${gates:-<none>}"
+
+      - name: Dispatch gates and wait
+        id: gates
+        if: ${{ steps.list.outputs.gates != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.SPAT || github.token }}
+        run: |
+          set -euo pipefail
+          bash scripts/dispatch_gates.sh \
+              --candidate-repo "${CANDIDATE_REPO}" \
+              --candidate-ref "${{ needs.candidate.outputs.candidate_ref }}" \
+              --candidate-sha "${{ needs.candidate.outputs.candidate_sha }}" \
+              --workflow-repo "${{ github.repository }}" \
+              --gates "${{ steps.list.outputs.gates }}" \
+              --pr "${{ github.event.pull_request.number || inputs.pr || 0 }}" \
+              --output "$GITHUB_WORKSPACE/gate-summary.md" \
+              --verbose
+
+      - name: Upload gate summary
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcom-next-gate-results
+          path: gate-summary.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            if [ -f gate-summary.md ]; then
+              cat gate-summary.md
+            else
+              echo "### Candidate gate results"
+              echo ""
+              echo "No gate summary was produced."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ----------------------------------------------------------------- report
+  report:
+    name: Report on the PR
+    needs: [validate, candidate, gates]
+    if: ${{ always() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qcom-next-candidate
+          path: candidate
+        continue-on-error: true
+
+      - name: Download gate results
+        uses: actions/download-artifact@v4
+        with:
+          name: qcom-next-gate-results
+          path: gates
+        continue-on-error: true
+
+      - name: Post or update the PR comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- qcom-next-pr-ci -->';
+            const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
+
+            const classification = '${{ needs.validate.outputs.classification }}' || 'n/a';
+            const candidateResult = '${{ needs.candidate.result }}';
+            const gatesResult     = '${{ needs.gates.result }}';
+            const candidateRef    = '${{ needs.candidate.outputs.candidate_ref }}';
+            const candidateSha    = '${{ needs.candidate.outputs.candidate_sha }}';
+            const candidateRepo   = '${{ env.CANDIDATE_REPO }}';
+            const digest          = '${{ needs.candidate.outputs.digest }}';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
+                           `/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const skipped = ['metadata-only', 'no-change'].includes(classification);
+            const ok = skipped
+              ? true
+              : candidateResult === 'success' &&
+                ['success', 'skipped'].includes(gatesResult);
+
+            const lines = [
+              marker,
+              `## qcom-next config PR CI: ${ok ? 'passed' : 'needs attention'}`,
+              '',
+              `- Classification: \`${classification}\``,
+              `- Candidate generation: \`${candidateResult}\``,
+              `- Gates: \`${gatesResult}\``,
+            ];
+
+            if (candidateRef) {
+              const refUrl = `https://github.com/${candidateRepo}/tree/${candidateRef}`;
+              lines.push(`- Candidate ref: [\`${candidateRef}\`](${refUrl}) in \`${candidateRepo}\``);
+              lines.push(`- Candidate commit: \`${candidateSha}\``);
+            }
+            if (digest) {
+              lines.push(`- Tested-set digest: \`${digest}\``);
+            }
+            if (skipped) {
+              lines.push('');
+              lines.push('The generated tree is unchanged by this PR, so the build and test ' +
+                         'gates were not run.');
+            }
+            lines.push(`- [Full run](${runUrl})`);
+            lines.push('');
+            lines.push(read('candidate/summary.md'));
+            lines.push('');
+            lines.push(read('gates/gate-summary.md'));
+
+            const body = lines.join('\n');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const existing = await github.paginate(
+              github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = existing.find((c) => c.body && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment(
+                { owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment(
+                { owner, repo, issue_number, body });
+            }
+
+  # ------------------------------------------------------------ final status
+  final-status:
+    name: Final status
+    needs: [validate, candidate, gates]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Decide the overall verdict
+        run: |
+          set -euo pipefail
+          classification='${{ needs.validate.outputs.classification }}'
+          validate='${{ needs.validate.result }}'
+          candidate='${{ needs.candidate.result }}'
+          gates='${{ needs.gates.result }}'
+
+          echo "classification : $classification"
+          echo "validate       : $validate"
+          echo "candidate      : $candidate"
+          echo "gates          : $gates"
+
+          if [ "$validate" != "success" ]; then
+            echo "::error title=qcom-next PR CI::configuration validation failed"
+            exit 1
+          fi
+
+          case "$classification" in
+            metadata-only|no-change)
+              echo "generated tree is unchanged; gates intentionally skipped"
+              exit 0
+              ;;
+            invalid-mixed-change)
+              echo "::error title=qcom-next PR CI::change rejected by the classifier"
+              exit 1
+              ;;
+          esac
+
+          if [ "$candidate" != "success" ]; then
+            echo "::error title=qcom-next PR CI::candidate tree generation failed"
+            exit 1
+          fi
+          case "$gates" in
+            success|skipped) ;;
+            *)
+              echo "::error title=qcom-next PR CI::candidate gates did not pass"
+              exit 1
+              ;;
+          esac
+          echo "all required stages passed"

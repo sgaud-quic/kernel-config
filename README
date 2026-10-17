@@ -102,6 +102,7 @@ Run the tooling's own tests:
 
     scripts/selftest_qcom_next_config.py
     scripts/selftest_qcom_next_generate.sh
+    scripts/selftest_qcom_next_ci.py
 
 During the migration from `qcom-next.conf`, most topics do not yet have a
 conventional tag at their pinned SHA. Pass `--allow-untagged` to downgrade those
@@ -148,6 +149,44 @@ To confirm a regenerated tree is the one that was tested:
 The digest deliberately covers the inputs and not the integration commit:
 `ci-merge` stamps merge commits with the current time, so two runs from
 identical inputs differ in commit id while consuming identical content.
+
+
+What CI does with a config PR
+-----------------------------
+
+`.github/workflows/qcom-next-pr-ci.yml` runs on every PR that touches the
+configuration:
+
+    validate + classify
+      -> generate the candidate tree from the pinned SHAs
+      -> push it as a candidate ref
+      -> dispatch the kernel, Yocto and Ubuntu gates against that ref
+      -> report everything back on the PR
+
+Candidate refs are named
+
+    qcom-next-candidate/pr-<pr-number>-<short-sha>
+
+and are currently pushed to `qualcomm-linux-stg/kernel`, a staging repository,
+so the flow can be exercised without touching production refs. The target is
+configurable through the `candidate_repo` dispatch input.
+`.github/workflows/prune-qcom-next-candidates.yml` deletes them once their PR is
+closed, or after seven days.
+
+A `metadata-only` or `no-change` PR does not alter the generated tree, so the
+build and test gates are skipped and only validation runs.
+
+The gates are invoked through their existing `workflow_dispatch` interface
+rather than as reusable workflows, because two of them read some inputs through
+`github.event.inputs.*`, which is populated for a dispatch but empty under
+`workflow_call`. Completion is detected by polling the commit status of the
+candidate commit: each gate already reports through
+`.github/actions/workflow_status`, which posts a commit status whose `context`
+is the gate's check name. That is an exact correlation, needs no run-id
+guessing, and keeps working when a gate is retried.
+
+`qcom-next` itself is never written by this workflow. Publication is a separate,
+serialized step.
 
 
 Validation rules
