@@ -15,14 +15,15 @@
 #
 # Prerequisites that live outside this file:
 #
-#   * CANDIDATE_PAT (or SPAT) must be able to push branches to the candidate
-#     repository and post commit statuses on it.
-#   * The gates reference composite actions at
-#     qualcomm-linux/kernel-config/.github/actions/...@main. The generalized
-#     sync action, which allows a non-production kernel repo to be checked out
-#     at an exact ref, therefore has to be on main before the gate stage can
-#     work against a staging repo. Until then, run with gates=none to exercise
-#     generation and the candidate push on their own.
+#   * SPAT must be able to push branches to the candidate repository and post
+#     commit statuses on it.
+#   * The dispatched gates run their workflow file from the ref given to
+#     gh workflow run, so they follow this branch. The composite actions they
+#     call internally are still resolved at @main inside build.yml and
+#     test.yml; fully un-pinning those needs build.yml restructured to keep
+#     kernel-config in a subdirectory, because the sync action replaces the
+#     workspace with the kernel tree. Until then, run with gates=none to
+#     exercise generation and the candidate push on their own.
 name: qcom-next config PR CI
 
 on:
@@ -160,12 +161,12 @@ jobs:
       - name: Push the candidate ref
         id: push
         env:
-          GH_PUSH_TOKEN: ${{ secrets.CANDIDATE_PAT || secrets.SPAT }}
+          GH_PUSH_TOKEN: ${{ secrets.SPAT }}
         run: |
           set -euo pipefail
 
           if [ -z "${GH_PUSH_TOKEN:-}" ]; then
-            echo "::error title=qcom-next candidate::no push token available. Set CANDIDATE_PAT (or SPAT) with push access to ${CANDIDATE_REPO}."
+            echo "::error title=qcom-next candidate::no push token available. SPAT must have push access to ${CANDIDATE_REPO}."
             exit 1
           fi
 
@@ -262,6 +263,9 @@ jobs:
         if: ${{ steps.list.outputs.gates != '' }}
         env:
           GH_TOKEN: ${{ secrets.SPAT || github.token }}
+          # Run the gate workflow files from the branch under test rather than
+          # the repository default.
+          GATE_WORKFLOW_REF: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           bash scripts/dispatch_gates.sh \
@@ -269,6 +273,7 @@ jobs:
               --candidate-ref "${{ needs.candidate.outputs.candidate_ref }}" \
               --candidate-sha "${{ needs.candidate.outputs.candidate_sha }}" \
               --workflow-repo "${{ github.repository }}" \
+              --workflow-ref "${GATE_WORKFLOW_REF}" \
               --gates "${{ steps.list.outputs.gates }}" \
               --pr "${{ github.event.pull_request.number || inputs.pr || 0 }}" \
               --output "$GITHUB_WORKSPACE/gate-summary.md" \

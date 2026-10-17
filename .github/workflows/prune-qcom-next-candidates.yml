@@ -83,7 +83,7 @@ jobs:
       # Scheduled runs default to actually deleting; manual runs default to a
       # dry run so an operator cannot delete a batch of refs by accident.
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run && 'true' || 'false') || 'false' }}
-      GH_TOKEN: ${{ secrets.CANDIDATE_PAT || secrets.SPAT || github.token }}
+      GH_TOKEN: ${{ secrets.SPAT || github.token }}
     steps:
       - name: Prune
         run: |

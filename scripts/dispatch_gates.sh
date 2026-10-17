@@ -38,6 +38,7 @@ CANDIDATE_REPO=""
 CANDIDATE_REF=""
 CANDIDATE_SHA=""
 WORKFLOW_REPO="qualcomm-linux/kernel-config"
+WORKFLOW_GIT_REF=""
 GATES="pre-merge"
 PR_NUMBER="0"
 TIMEOUT=10800          # 3h; a full kernel build plus LAVA can be slow
@@ -65,6 +66,10 @@ Required:
 Options:
   --workflow-repo OWNER/REPO    repo owning the gate workflows
                                 (default: qualcomm-linux/kernel-config)
+  --workflow-ref REF            git ref to run the gate workflow files from.
+                                Defaults to the repo's default branch; pass the
+                                branch under test so the gates use its version
+                                of the workflow rather than main.
   --gates LIST                  comma-separated: pre-merge, yocto, ubuntu
                                 (default: pre-merge)
   --pr NUMBER                   PR number passed to the gates (default: 0)
@@ -78,6 +83,10 @@ Options:
 
 Requires the gh CLI, authenticated with a token that can dispatch workflows in
 --workflow-repo and read commit statuses in --candidate-repo.
+
+Note: --workflow-ref controls which revision of the *workflow file* runs. The
+composite actions those workflows call are pinned inside them (build.yml and
+test.yml reference .../actions/...@main), so they are not affected by this.
 
 Gate -> workflow file -> status context:
   pre-merge  pre_merge.yml         "pre-merge"
@@ -94,6 +103,7 @@ while [ $# -gt 0 ]; do
         --candidate-ref)  CANDIDATE_REF="${2:?}"; shift 2 ;;
         --candidate-sha)  CANDIDATE_SHA="${2:?}"; shift 2 ;;
         --workflow-repo)  WORKFLOW_REPO="${2:?}"; shift 2 ;;
+        --workflow-ref)   WORKFLOW_GIT_REF="${2:?}"; shift 2 ;;
         --gates)          GATES="${2:?}"; shift 2 ;;
         --pr)             PR_NUMBER="${2:?}"; shift 2 ;;
         --timeout)        TIMEOUT="${2:?}"; shift 2 ;;
@@ -144,6 +154,7 @@ info "candidate repo : $CANDIDATE_REPO"
 info "candidate ref  : $CANDIDATE_REF"
 info "candidate sha  : $CANDIDATE_SHA"
 info "workflow repo  : $WORKFLOW_REPO"
+info "workflow ref   : ${WORKFLOW_GIT_REF:-<default branch>}"
 info "gates          : ${#SELECTED[@]}"
 for entry in "${SELECTED[@]}"; do
     IFS='|' read -r name wf ctx <<< "$entry"
@@ -155,6 +166,7 @@ if [ "$DRY_RUN" -eq 1 ]; then
     for entry in "${SELECTED[@]}"; do
         IFS='|' read -r name wf ctx <<< "$entry"
         info "gh workflow run $wf --repo $WORKFLOW_REPO \\"
+        [ -n "$WORKFLOW_GIT_REF" ] && info "    --ref $WORKFLOW_GIT_REF \\"
         info "    -f pr=$PR_NUMBER \\"
         info "    -f sha=$CANDIDATE_SHA \\"
         info "    -f ref=$CANDIDATE_REF \\"
@@ -191,11 +203,14 @@ DISPATCH_FAILED=0
 for entry in "${SELECTED[@]}"; do
     IFS='|' read -r name wf ctx <<< "$entry"
     info "dispatching $name ($wf)"
-    args=(workflow run "$wf" --repo "$WORKFLOW_REPO"
-          -f "pr=$PR_NUMBER"
-          -f "sha=$CANDIDATE_SHA"
-          -f "ref=$CANDIDATE_REF"
-          -f "repo=$CANDIDATE_REPO")
+    args=(workflow run "$wf" --repo "$WORKFLOW_REPO")
+    # Run the workflow file from the branch under test, so the gates follow
+    # this branch instead of the repository default.
+    [ -n "$WORKFLOW_GIT_REF" ] && args+=(--ref "$WORKFLOW_GIT_REF")
+    args+=(-f "pr=$PR_NUMBER"
+           -f "sha=$CANDIDATE_SHA"
+           -f "ref=$CANDIDATE_REF"
+           -f "repo=$CANDIDATE_REPO")
     # pre-merge-yocto.yml additionally requires `base`.
     if [ "$name" = "yocto" ]; then
         args+=(-f "base=tag")
