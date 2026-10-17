@@ -1,0 +1,258 @@
+---
+# Phase 1 of the kernel topic promotion flow.
+#
+# First CI stage for every change to the SHA-pinned qcom-next configuration.
+# Runs the structural validator (V1-V5, V8), then the diff-based change
+# classifier (V6 scope, V7 freeze), and publishes the result as a PR check,
+# a job summary and a sticky PR comment.
+#
+# Outputs consumed by later phases:
+#   classification   rc-uprev | topic-promotion | atomic-topic-promotion |
+#                    metadata-only | rerere-only | no-change | invalid-mixed-change
+#   publish_allowed  whether the promotion freeze permits publication
+#   promoted_topics  comma-separated topic names whose sha/tag moved
+#   required_gates   human-readable gate profile for this change class
+name: Validate qcom-next config
+
+on:
+  pull_request:
+    branches: [main, ci-v2]
+    paths:
+      - qcom-next.yaml
+      - schemas/qcom-next.schema.json
+      - scripts/validate_qcom_next_config.py
+      - scripts/classify_qcom_next_change.py
+      - scripts/selftest_qcom_next_config.py
+      - topic_maintainers.json
+      - .github/workflows/validate-qcom-next-config.yml
+  workflow_dispatch:
+    inputs:
+      base_ref:
+        description: "Base ref to diff against (default: the PR base, or main)"
+        type: string
+        required: false
+      allow_untagged:
+        description: Downgrade missing-tag errors to warnings (migration only)
+        type: boolean
+        default: false
+      allow_atomic_override:
+        description: Permit a multi-topic promotion that depends_on does not justify
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      base_ref:
+        type: string
+        required: false
+      allow_untagged:
+        type: boolean
+        default: false
+      allow_atomic_override:
+        type: boolean
+        default: false
+    outputs:
+      classification:
+        description: Change class determined by the classifier
+        value: ${{ jobs.validate.outputs.classification }}
+      publish_allowed:
+        description: Whether publication is permitted (promotion freeze honoured)
+        value: ${{ jobs.validate.outputs.publish_allowed }}
+      promoted_topics:
+        description: Comma-separated topics whose sha/tag changed
+        value: ${{ jobs.validate.outputs.promoted_topics }}
+      required_gates:
+        description: Gate profile required for this change class
+        value: ${{ jobs.validate.outputs.required_gates }}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # One validation run per PR; superseded pushes are cancelled because only the
+  # newest config revision matters.
+  group: validate-qcom-next-config-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate and classify
+    runs-on: ubuntu-latest
+    outputs:
+      classification: ${{ steps.classify.outputs.classification }}
+      publish_allowed: ${{ steps.classify.outputs.publish_allowed }}
+      promoted_topics: ${{ steps.classify.outputs.promoted_topics }}
+      required_gates: ${{ steps.classify.outputs.required_gates }}
+
+    steps:
+      - name: Checkout config repository
+        uses: actions/checkout@v4
+        with:
+          # Full history so the classifier can read the base revision of the
+          # config with `git show <base>:qcom-next.yaml`.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet --upgrade pyyaml jsonschema
+
+      - name: Resolve base ref
+        id: base
+        env:
+          INPUT_BASE_REF: ${{ inputs.base_ref }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "${INPUT_BASE_REF:-}" ]; then
+            base="${INPUT_BASE_REF}"
+          elif [ -n "${PR_BASE_REF:-}" ]; then
+            base="origin/${PR_BASE_REF}"
+          else
+            base="origin/main"
+          fi
+          git fetch --quiet origin "${base#origin/}" || true
+          if ! git rev-parse --verify --quiet "$base" >/dev/null; then
+            echo "::error title=qcom-next config::base ref '$base' could not be resolved"
+            exit 1
+          fi
+          echo "ref=$base" >> "$GITHUB_OUTPUT"
+          echo "Base ref: $base ($(git rev-parse --short "$base"))"
+
+      - name: Run tooling self-tests
+        # Guards the validator and classifier themselves. A broken rule engine
+        # would otherwise silently pass every config.
+        run: python scripts/selftest_qcom_next_config.py
+
+      - name: Validate config (V1-V5, V8)
+        id: validate
+        env:
+          ALLOW_UNTAGGED: ${{ inputs.allow_untagged }}
+        run: |
+          set -euo pipefail
+          args=(--config qcom-next.yaml
+                --schema schemas/qcom-next.schema.json
+                --maintainers topic_maintainers.json
+                --format github
+                --markdown-out validate-summary.md)
+          if [ "${ALLOW_UNTAGGED:-false}" = "true" ]; then
+            args+=(--allow-untagged)
+            echo "::notice title=qcom-next config::running with --allow-untagged (migration mode)"
+          fi
+          set +e
+          python scripts/validate_qcom_next_config.py "${args[@]}"
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit $rc
+
+      - name: Classify change (V6 scope, V7 freeze)
+        id: classify
+        if: ${{ always() && steps.validate.outcome == 'success' }}
+        env:
+          BASE_REF: ${{ steps.base.outputs.ref }}
+          ALLOW_ATOMIC: ${{ inputs.allow_atomic_override }}
+        run: |
+          set -euo pipefail
+          args=(--base-ref "$BASE_REF"
+                --config qcom-next.yaml
+                --format text
+                --markdown-out classify-summary.md)
+          if [ "${ALLOW_ATOMIC:-false}" = "true" ]; then
+            args+=(--allow-atomic-override)
+            echo "::notice title=qcom-next config::atomic override enabled by integration owner"
+          fi
+          set +e
+          python scripts/classify_qcom_next_change.py "${args[@]}"
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "::error title=qcom-next config::change rejected or blocked by the promotion freeze"
+          fi
+          exit $rc
+
+      - name: Build job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## qcom-next config validation"
+            echo ""
+            if [ -f validate-summary.md ]; then
+              cat validate-summary.md
+              echo ""
+            fi
+            if [ -f classify-summary.md ]; then
+              cat classify-summary.md
+              echo ""
+            fi
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Base ref | \`${{ steps.base.outputs.ref }}\` |"
+            echo "| Validation | \`${{ steps.validate.outcome }}\` |"
+            echo "| Classification | \`${{ steps.classify.outputs.classification || 'n/a' }}\` |"
+            echo "| Publication allowed | \`${{ steps.classify.outputs.publish_allowed || 'n/a' }}\` |"
+            echo "| Required gates | ${{ steps.classify.outputs.required_gates || 'n/a' }} |"
+            echo "| Workflow run | [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: qcom-next-config-validation
+          path: |
+            validate-summary.md
+            classify-summary.md
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Comment result on PR
+        if: ${{ always() && github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- qcom-next-config-validation -->';
+            const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
+
+            const validation = '${{ steps.validate.outcome }}';
+            const classification = '${{ steps.classify.outputs.classification }}' || 'n/a';
+            const publishAllowed = '${{ steps.classify.outputs.publish_allowed }}' || 'n/a';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
+                           `/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const ok = validation === 'success' && publishAllowed !== 'false';
+            const heading = ok
+              ? 'qcom-next config validation passed'
+              : 'qcom-next config validation needs attention';
+
+            const body = [
+              marker,
+              `## ${heading}`,
+              '',
+              `- Validation: \`${validation}\``,
+              `- Classification: \`${classification}\``,
+              `- Publication allowed: \`${publishAllowed}\``,
+              `- [Full run](${runUrl})`,
+              '',
+              read('validate-summary.md'),
+              '',
+              read('classify-summary.md'),
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const existing = await github.paginate(
+              github.rest.issues.listComments, { owner, repo, issue_number });
+            const mine = existing.find((c) => c.body && c.body.includes(marker));
+
+            if (mine) {
+              await github.rest.issues.updateComment(
+                { owner, repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment(
+                { owner, repo, issue_number, body });
+            }
