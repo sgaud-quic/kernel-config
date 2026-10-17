@@ -23,6 +23,10 @@ on:
       - scripts/validate_qcom_next_config.py
       - scripts/classify_qcom_next_change.py
       - scripts/selftest_qcom_next_config.py
+      - scripts/qcom_next_config.py
+      - scripts/generate_qcom_next_tree.sh
+      - scripts/check_tested_tree_matches.sh
+      - scripts/selftest_qcom_next_generate.sh
       - topic_maintainers.json
       - .github/workflows/validate-qcom-next-config.yml
   workflow_dispatch:
@@ -256,3 +260,75 @@ jobs:
               await github.rest.issues.createComment(
                 { owner, repo, issue_number, body });
             }
+
+  generation-selftests:
+    # Guards the SHA-pinned tree generator. It runs entirely against synthetic
+    # local repositories, so it needs no access to kernel-topics and no network
+    # beyond checking out automerge. Without this, a regression in the pinning
+    # mechanism would only surface during a real integration run.
+    name: Candidate generation self-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout config repository
+        uses: actions/checkout@v4
+
+      - name: Checkout automerge
+        uses: actions/checkout@v4
+        with:
+          repository: qualcomm-linux/automerge
+          path: .automerge-checkout
+          # Falls back to the default token for forks, where SPAT is unavailable.
+          token: ${{ secrets.SPAT || github.token }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet --upgrade pyyaml
+
+      - name: Report tool versions
+        run: |
+          git --version
+          bash --version | head -1
+          python3 --version
+
+      - name: Run generation self-tests
+        env:
+          AUTOMERGE_DIR: ${{ github.workspace }}/.automerge-checkout
+        run: |
+          set -euo pipefail
+          test -f "$AUTOMERGE_DIR/ci-merge" || {
+            echo "::error title=qcom-next generation::ci-merge not found in the automerge checkout"
+            exit 1
+          }
+          bash scripts/selftest_qcom_next_generate.sh
+
+      - name: Verify the in-tree config projects cleanly
+        # Cheap guard that the real 77-topic config can still be turned into the
+        # artifacts the generator needs, without running a full merge.
+        run: |
+          set -euo pipefail
+          python3 scripts/qcom_next_config.py ref-clashes
+          python3 scripts/qcom_next_config.py merge-conf \
+              --url-override file:///placeholder --output /tmp/merge.conf
+          rows=$(grep -vc '^#' /tmp/merge.conf || true)
+          echo "merge.conf rows: $rows"
+          test "$(grep -c '^baseline' /tmp/merge.conf)" -eq 1
+          python3 scripts/qcom_next_config.py tested-set --output /tmp/tested-set.txt
+          python3 scripts/qcom_next_config.py digest /tmp/tested-set.txt
+          fields=$(python3 scripts/qcom_next_config.py topics | awk -F'\t' '{print NF}' | sort -u)
+          echo "topic field counts: $fields"
+          test "$fields" = "5"
+
+      - name: Job summary
+        if: ${{ always() }}
+        run: |
+          {
+            echo "## qcom-next candidate generation self-tests"
+            echo ""
+            echo "Synthetic repositories exercise the pinning mechanism end to end:"
+            echo "pinned SHAs are consumed, moved branch tips are ignored, and the"
+            echo "tested-set digest is stable across runs."
+          } >> "$GITHUB_STEP_SUMMARY"

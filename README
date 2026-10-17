@@ -101,10 +101,53 @@ Classify a change the way CI will, against the branch you will target:
 Run the tooling's own tests:
 
     scripts/selftest_qcom_next_config.py
+    scripts/selftest_qcom_next_generate.sh
 
 During the migration from `qcom-next.conf`, most topics do not yet have a
 conventional tag at their pinned SHA. Pass `--allow-untagged` to downgrade those
 errors to warnings. Promotion PRs are expected to run without that flag.
+
+
+Generating the tree locally
+---------------------------
+
+CI generates the candidate tree, but the same script reproduces it locally,
+which is what you need when resolving a merge conflict:
+
+    scripts/generate_qcom_next_tree.sh --kernel-dir /path/to/kernel-topics
+
+It writes the following to its `--out-dir`:
+
+    merge.conf        generated flat conf for ci-merge (disposable)
+    merge.log         full ci-merge output
+    tested-set.txt    the inputs that define the tree, with a digest
+    topic-shas.tsv    topic -> pinned SHA and merged commit count
+    conflicts.txt     conflicting topics and paths, if any
+    summary.md        Markdown summary
+
+How the pinning works, since it is not obvious: automerge's `ci-merge` normally
+merges live branch tips. Two of its existing behaviours are used to feed it
+pinned commits instead. It prefers a local ref named `override/<topic>` over
+`<remote>/<branch>`, so creating that ref at the pinned SHA pins the topic. It
+also takes the merge base from `remotes/<baseline>/<branch>`, and there is no
+override hook for the baseline, so the generated conf points every row at the
+local kernel worktree over `file://` after local branches there have been reset
+to the pinned SHAs. That pins the baseline as well, and has the side benefit of
+turning what would be 78 network fetches into local ones.
+
+Consequently the generated tree depends only on the config, never on what a
+topic branch tip happens to be at the time. The self-tests assert exactly that
+by advancing every branch tip and requiring the regenerated tree to be
+unchanged.
+
+To confirm a regenerated tree is the one that was tested:
+
+    scripts/check_tested_tree_matches.sh --expected tested-set.txt \
+                                         --kernel-dir /path/to/kernel-topics
+
+The digest deliberately covers the inputs and not the integration commit:
+`ci-merge` stamps merge commits with the current time, so two runs from
+identical inputs differ in commit id while consuming identical content.
 
 
 Validation rules
