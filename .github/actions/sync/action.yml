@@ -1,12 +1,36 @@
 name: Sync workspace
 
+# Prepares a kernel workspace for the build and test gates.
+#
+# Three shapes are supported:
+#
+#   PR on a kernel repo        repo is a kernel repo and pr_number is set.
+#                              The base branch is checked out and the PR is
+#                              merged into it. This is the long-standing
+#                              behaviour.
+#
+#   exact ref ("candidate")    repo is a kernel repo and pr_number is empty or
+#                              0. The given ref is checked out as-is, with no
+#                              PR merge and no merge of the base branch. Used
+#                              by the SHA-pinned qcom-next flow, where the
+#                              object under test is a generated candidate ref
+#                              rather than a pull request.
+#
+#   topic PR on kernel-topics  repo is qualcomm-linux/kernel-topics. The kernel
+#                              and automerge repos are cloned, dependencies are
+#                              resolved from the PR body, and automerge runs.
+#
+# The kernel repository to check out comes from the repo input. It used to be
+# hardcoded to qualcomm-linux/kernel, which meant the input was ignored and a
+# staging repository could not be tested.
+
 inputs:
   base_branch:
-    description: Base branch
+    description: Branch or ref to check out
     required: true
     default: qcom-next-staging
   pr_number:
-    description: PR number
+    description: PR number to merge. Leave empty or 0 to check out base_branch as-is.
     required: false
   GH_TOKEN:
     description: Access Token
@@ -30,13 +54,34 @@ runs:
         rm -rf ${{ github.workspace }}/*
         echo "Workspace cleaned successfully!"
 
-    - name: Checkout PR branch
-      if: inputs.repo == 'qualcomm-linux/kernel'
+    - name: Classify sync mode
+      id: mode
+      shell: bash
+      run: |
+        set -euo pipefail
+        repo='${{ inputs.repo }}'
+        pr='${{ inputs.pr_number }}'
+
+        if [ "$repo" = "qualcomm-linux/kernel-topics" ]; then
+          mode=topics
+        elif [ -z "$pr" ] || [ "$pr" = "0" ]; then
+          # No PR to merge, so the ref is already exactly what must be tested.
+          mode=ref
+        else
+          mode=pr
+        fi
+
+        echo "mode=$mode" >> "$GITHUB_OUTPUT"
+        echo "Sync mode: $mode (repo=$repo, pr=${pr:-<none>}, ref=${{ inputs.base_branch }})"
+
+    - name: Checkout kernel repository
+      if: steps.mode.outputs.mode != 'topics'
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
-        repository: qualcomm-linux/kernel
+        repository: ${{ inputs.repo }}
         ref: ${{ inputs.base_branch }}
+        token: ${{ inputs.GH_TOKEN }}
 
     - name: Configure git
       shell: bash
@@ -45,7 +90,7 @@ runs:
         git config --global user.email "github-actions@github.com"
 
     - name: Sync with latest changes
-      if: inputs.repo == 'qualcomm-linux/kernel'
+      if: steps.mode.outputs.mode == 'pr'
       shell: bash
       run: |
         set -e
@@ -53,8 +98,17 @@ runs:
         git fetch origin ${{ inputs.base_branch }}
         git merge --no-ff origin/${{ inputs.base_branch }}
 
+    - name: Record the checked out commit
+      if: steps.mode.outputs.mode == 'ref'
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "Testing ${{ inputs.repo }} at ${{ inputs.base_branch }}"
+        echo "commit: $(git rev-parse HEAD)"
+        git --no-pager log -1 --format='%H %s'
+
     - name: Clone repositories
-      if: inputs.repo == 'qualcomm-linux/kernel-topics'
+      if: steps.mode.outputs.mode == 'topics'
       shell: bash
       run: |
         git clone https://github.com/qualcomm-linux/kernel.git
@@ -160,11 +214,11 @@ runs:
         git commit -m "Merged PR ${{inputs.pr_number}}"
 
     - name: Fetch PR
-      if: inputs.repo == 'qualcomm-linux/kernel'
+      if: steps.mode.outputs.mode == 'pr'
       shell: bash
       run: |
         git checkout ${{ inputs.base_branch }}
-        git fetch https://github.com/qualcomm-linux/kernel.git pull/${{inputs.pr_number}}/head:pr-${{inputs.pr_number}}
+        git fetch https://github.com/${{ inputs.repo }}.git pull/${{inputs.pr_number}}/head:pr-${{inputs.pr_number}}
         git merge pr-${{ inputs.pr_number }} --no-commit || echo "Merge already applied or fast-forwarded"
         if ! git diff --cached --quiet; then
           git commit -m "Merged PR #${{ inputs.pr_number }}"
@@ -176,8 +230,12 @@ runs:
       id: set-workspace
       shell: bash
       run: |
-        if [[ "${{ inputs.repo }}" == "qualcomm-linux/kernel" ]]; then
-          echo "workspace=${{ github.workspace }}" >> "$GITHUB_OUTPUT"
-        else
+        # The topics flow clones the kernel into a subdirectory; every other
+        # mode checks the kernel out at the workspace root. Keyed on the sync
+        # mode rather than on a specific repository name, so a staging or fork
+        # kernel repo resolves correctly.
+        if [[ "${{ steps.mode.outputs.mode }}" == "topics" ]]; then
           echo "workspace=${{ github.workspace }}/kernel" >> "$GITHUB_OUTPUT"
+        else
+          echo "workspace=${{ github.workspace }}" >> "$GITHUB_OUTPUT"
         fi
