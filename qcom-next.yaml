@@ -1,0 +1,518 @@
+# qcom-next SHA-pinned topic configuration
+#
+# SINGLE SOURCE OF TRUTH for the content of the qcom-next integration tree.
+#
+#   qcom-next = f( base.sha , ordered topics[].sha , rerere cache revision )
+#
+# Rules:
+#   * qcom-next is never hand-edited. It is published only by the
+#     publication workflow, driven by this file.
+#   * Every sha recorded here is a STABLE sha: it has passed the CI gates.
+#   * Every sha must be reachable from a tag so it survives a topic rebase.
+#   * Topic owners live in topic_maintainers.json, keyed by the topic name
+#     below. Do not duplicate owner data here.
+#   * Array order IS merge order and must respect depends_on.
+#
+# To promote a topic: open a PR changing only that topic's sha and tag.
+# To uprev the kernel RC: open a PR changing only the base block.
+# Validated by scripts/validate_qcom_next_config.py against
+# schemas/qcom-next.schema.json.
+#
+# Bootstrapped from qcom-next.conf on 2026-10-17 by
+# scripts/bootstrap_qcom_next_yaml.py (branch tips captured as the initial
+# pinned SHAs).
+#
+# REMOVED during bootstrap: 1 topic(s) listed in the legacy conf
+# no longer exist on their remote and were dropped (FR-INT-02). Restore the
+# branch and re-add the entry if this was not intended:
+#   - tech/debug/soc  (was qcom-next.conf:10, branch tech/debug/soc)
+#
+# NOTE: 76 topic(s) had no tag pointing at the captured tip at
+# bootstrap time and carry 'tag: null'. Each must be tagged
+# (<branch>-<kernel-version>-<YYYYMMDD>) before it can be promoted; the
+# validator rejects a null tag unless --allow-untagged is passed.
+
+schema_version: 1
+
+# Upstream baseline. Changed only by an RC uprev PR (Phase A), which must
+# leave every topic sha untouched.
+base:
+  repo: "https://github.com/qualcomm-linux/kernel.git"
+  branch: qcom-next-staging
+  tag: v7.3-rc6
+  sha: a90ee4305c4a5df72c11b31dacfdc76e00fcf78a
+
+# open   = topic promotions may publish
+# frozen = RC uprev in progress; promotions may validate but not publish
+promotion_state: open
+
+# Shared rerere cache replayed during tree generation. Read-only in normal
+# PR CI; updated by a topic maintainer only when resolving a conflict.
+rerere_cache:
+  repo: "https://github.com/sgaud-quic/cache"
+  ref: master
+
+# 77 topic branches, in merge order.
+topics:
+  - name: tech/bsp/clk
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/clk
+    sha: cbb26e5d6c72b81dba94d8f78279c9a834770a1a
+    tag: null
+    depends_on: []
+  - name: tech/bsp/devfreq
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/devfreq
+    sha: 0837ca4afab5ff6397284116dfad794b0b7884d5
+    tag: null
+    depends_on: []
+  - name: tech/bsp/ec
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/ec
+    sha: 926202a1b7f5eb3fcb114a02bf4fddf1754a43f9
+    tag: null
+    depends_on: []
+  - name: tech/bsp/interconnect
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/interconnect
+    sha: 81fc6e2c356d01f1606ae1323b1b1ef3b6db0ad2
+    tag: null
+    depends_on: []
+  - name: tech/bsp/sched
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/sched
+    sha: 2cb2e1893260e8060cbc0510c4fa52cda90947f8
+    tag: null
+    depends_on: []
+  - name: tech/mem/secure-buffer
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mem/secure-buffer
+    sha: 591cd656a1bf5ea94a222af5ef2ee76df029c1d2
+    tag: null
+    depends_on: []
+  - name: tech/security/firmware-smc
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/security/firmware-smc
+    sha: a1d3d5bd4bff978aa7d22ae946ee6fabfbd2746d
+    tag: null
+    depends_on: []
+  - name: tech/bsp/soc-infra
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/soc-infra
+    sha: 3633b44cc241cc8e03dae3b09be0817c3bac9c4f
+    tag: null
+    depends_on: []
+  - name: tech/bsp/pinctrl
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/pinctrl
+    sha: 79149ef6a826d6237346aa74eca65ccbe19d761f
+    tag: null
+    depends_on: []
+  - name: tech/bsp/remoteproc
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bsp/remoteproc
+    sha: 8c716bcd0b5eca15711a114434340d2f89cbf4d1
+    tag: null
+    depends_on: []
+  - name: tech/bus/peripherals
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/peripherals
+    sha: d69a417c1c2b93a0c7c174a2d1cab0da18dbad64
+    tag: null
+    depends_on: []
+  - name: tech/bus/pci/all
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/pci/all
+    sha: 374f9028d7be85fd7b4b4f1cef609233e6796ece
+    tag: null
+    depends_on: []
+  - name: tech/bus/pci/mhi
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/pci/mhi
+    sha: 7fd2df204f342fc17d1a0bfcd474b24232fb0f32
+    tag: null
+    depends_on: []
+  - name: tech/bus/pci/phy
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/pci/phy
+    sha: df2908090cda368b01ff43709f51890076c56157
+    tag: null
+    depends_on: []
+  - name: tech/bus/pci/pwrctl
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/pci/pwrctl
+    sha: 8f0b4cce4481fb22653697cced8d0d04027cb1e8
+    tag: null
+    depends_on: []
+  - name: tech/bus/usb/dwc
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/usb/dwc
+    sha: 6f2460005b7a8909fcc9668e9abcf76050d6198e
+    tag: null
+    depends_on: []
+  - name: tech/bus/usb/gadget
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/usb/gadget
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/bus/usb/phy
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/bus/usb/phy
+    sha: b94824df2da48cbe95cc99a0fdd2bd309605f79e
+    tag: null
+    depends_on: []
+  - name: tech/debug/eud
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/debug/eud
+    sha: 8f0b4cce4481fb22653697cced8d0d04027cb1e8
+    tag: null
+    depends_on: []
+  - name: tech/debug/hwtracing
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/debug/hwtracing
+    sha: fae0f798a947b7949522d5657e4b40a1cc92b12c
+    tag: null
+    depends_on: []
+  - name: tech/debug/rdbg
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/debug/rdbg
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/pmic/backlight
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pmic/backlight
+    sha: e04c78d86a9699d136910cfc0bdcf01087e3267e
+    tag: null
+    depends_on: []
+  - name: tech/pmic/mfd
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pmic/mfd
+    sha: e04c78d86a9699d136910cfc0bdcf01087e3267e
+    tag: null
+    depends_on: []
+  - name: tech/pmic/misc
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pmic/misc
+    sha: e7cdfc06643b82a63549fb60bf29f0ed13e54cfe
+    tag: null
+    depends_on: []
+  - name: tech/pmic/regulator
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pmic/regulator
+    sha: 5200f5f493f79f14bbdc349e402a40dfb32f23c8
+    tag: null
+    depends_on: []
+  - name: tech/pmic/supply
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pmic/supply
+    sha: f83ec76bf285bea5727f478a68b894f5543ca76e
+    tag: tech/pmic/supply-6.17-rc6-20260821
+    depends_on: []
+  - name: tech/mem/dma-buf
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mem/dma-buf
+    sha: d21130764745b2435799730e1e51078dfe94db35
+    tag: null
+    depends_on: []
+  - name: tech/mem/iommu
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mem/iommu
+    sha: e1fac89078258e1073934473756910cbb935cc8b
+    tag: null
+    depends_on: []
+  - name: tech/mm/audio/all
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/audio/all
+    sha: 6d7300e29f264a180a168a0957c5560b7ca4bf0a
+    tag: null
+    depends_on: []
+  - name: tech/mm/audio/soundwire
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/audio/soundwire
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/mm/camss
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/camss
+    sha: d006a0bc9c26f11cdabb585bda83dcd5571774cf
+    tag: null
+    depends_on: []
+  - name: tech/mm/drm
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/drm
+    sha: aba65fd01262241f9e7aa9c0cef43626b00b0878
+    tag: null
+    depends_on: []
+  - name: tech/mm/fastrpc
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/fastrpc
+    sha: d0f45111b3cd17c7f7f35e71894e25e341d92f14
+    tag: null
+    depends_on: []
+  - name: tech/mm/phy
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/phy
+    sha: e7ae89a0c97ce2b68b0983cd01eda67cf373517d
+    tag: null
+    depends_on: []
+  - name: tech/mm/video
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/video
+    sha: e9c5fec755c5892f3625f66e70868d3a6e2eab18
+    tag: null
+    depends_on: []
+  - name: tech/mm/gpu
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mm/gpu
+    sha: e1748a35341c6b6c4f69856d5843023cca13a41b
+    tag: null
+    depends_on: []
+  - name: tech/mproc/rpmsg
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mproc/rpmsg
+    sha: cee9395acd8043be0644b25c34bfa86623f2b935
+    tag: null
+    depends_on: []
+  - name: tech/mproc/qmi
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mproc/qmi
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/net/ath
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/ath
+    sha: 5420bb027de24e18fdaf5e128864a6c4fc56c630
+    tag: null
+    depends_on: []
+  - name: tech/net/eth
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/eth
+    sha: 65af320370b7ba801469f32448cff2c0c19c91ea
+    tag: null
+    depends_on: []
+  - name: tech/net/rmnet
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/rmnet
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/net/qrtr
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/qrtr
+    sha: cee9395acd8043be0644b25c34bfa86623f2b935
+    tag: null
+    depends_on: []
+  - name: tech/net/phy
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/phy
+    sha: df2908090cda368b01ff43709f51890076c56157
+    tag: null
+    depends_on: []
+  - name: tech/net/bluetooth
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/net/bluetooth
+    sha: e352848cad1444a9125ebad6768024cc8a9cc0c4
+    tag: null
+    depends_on: []
+  - name: tech/pm/opp
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pm/opp
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/pm/pmdomain
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pm/pmdomain
+    sha: b3f799d9f139c5f4f678b11d33bf37a25322195d
+    tag: null
+    depends_on: []
+  - name: tech/pm/power
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pm/power
+    sha: 3faa52e4bb5a411b7ca71ecb52a725a4b67f0685
+    tag: null
+    depends_on: []
+  - name: tech/pm/thermal
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/pm/thermal
+    sha: 2602b17df1dab5715e2b1625738e1983a053ad02
+    tag: null
+    depends_on: []
+  - name: tech/security/crypto
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/security/crypto
+    sha: e1032fb7f8bb57dca6eca157ac52c8defb587cc0
+    tag: null
+    depends_on: []
+  - name: tech/security/fscrypt
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/security/fscrypt
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/security/ice
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/security/ice
+    sha: dc34f45bbd867d317614efdfeae9274d6c956454
+    tag: null
+    depends_on: []
+  - name: tech/security/optee-next
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/security/optee-next
+    sha: b157b8e9da0c5239dcef233f80b754adc6e5f09a
+    tag: null
+    depends_on: []
+  - name: tech/storage/nvmem
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/storage/nvmem
+    sha: 82f2b0b97b36ee3fcddf0f0780a9a0825d52fec3
+    tag: null
+    depends_on: []
+  - name: tech/storage/phy
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/storage/phy
+    sha: e7ae89a0c97ce2b68b0983cd01eda67cf373517d
+    tag: null
+    depends_on: []
+  - name: tech/storage/all
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/storage/all
+    sha: f2a8c9af405bb5a012b720c3f824920a6d9a158e
+    tag: null
+    depends_on: []
+  - name: tech/virt/gunyah
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/virt/gunyah
+    sha: e5f0a698b34ed76002dc5cff3804a61c80233a7a
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/qcs6490
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/qcs6490
+    sha: fdf8383bd714781dfce69bc0755844fe85389788
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/qcs9100
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/qcs9100
+    sha: df4f38e0ebf7edc26b43cce23131f7181cc557f2
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/qcs8300
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/qcs8300
+    sha: e12e7b435323aec1ba452c61242f41afe88dad80
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/qcs615
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/qcs615
+    sha: 4bc8635623a5bb44afd03203ffa1c8759c58bae6
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/agatti
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/agatti
+    sha: 2ca1b63b35a7e70a4a80398286211dee17729739
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/eliza
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/eliza
+    sha: 2e8adb56c31c3e7df57d0e0800127941d5e96d8d
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/hamoa
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/hamoa
+    sha: 7cdc1c1717ef2f890b5c1272d0822714942d4f52
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/glymur
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/glymur
+    sha: 5d3958defa86c5a1c0c7afa55ffd9282b87e500c
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/kaanapali
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/kaanapali
+    sha: 51c7fe596f1f711d56ace17e85d9749de9ecdbc2
+    tag: null
+    depends_on: []
+  - name: tech/all/dt/pakala
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/dt/pakala
+    sha: 09989ea9026567f25ce752b843e16659b106b416
+    tag: null
+    depends_on: []
+  - name: tech/all/hawi
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/hawi
+    sha: e15b1df702322eb6945b26f175bd53201c7d7939
+    tag: null
+    depends_on: []
+  - name: tech/all/maili
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/maili
+    sha: 0a27763b462357d44454db011f64490daf1cf7d2
+    tag: null
+    depends_on: []
+  - name: tech/all/shikra
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/shikra
+    sha: 13cbcdc93524207841d4f5cfe54d5ffc2e0b2508
+    tag: null
+    depends_on: []
+  - name: tech/all/config
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/config
+    sha: 68307b7d975eda470c697794163c512191a5e71c
+    tag: null
+    depends_on: []
+  - name: tech/overlay/dt
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/overlay/dt
+    sha: 8ac5736b97efbe7ebc2cfa6f4dc8a265b031a8a2
+    tag: null
+    depends_on: []
+  - name: tech/all/workaround
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/all/workaround
+    sha: 8b967f0408c447c34418fa20a760e0f0b92bee92
+    tag: null
+    depends_on: []
+  - name: tech/mproc/all
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/mproc/all
+    sha: cee9395acd8043be0644b25c34bfa86623f2b935
+    tag: null
+    depends_on: []
+  - name: tech/noup/debug/all
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/noup/debug/all
+    sha: 9f1e8aefe2eaa112abe0bbb5e9f67284effa3d8d
+    tag: null
+    depends_on: []
+  - name: tech/hwe/unoq
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: tech/hwe/unoq
+    sha: a2d85fe547167dbd8fc59618907c20a6f17d2e5a
+    tag: null
+    depends_on: []
+  - name: early/hwe/nord
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: early/hwe/nord
+    sha: 45ac4ce603fa9edb6d389b392b2b1ea0b76cc43b
+    tag: null
+    depends_on: []
+  - name: early/hwe/staging/nord
+    repo: "https://github.com/qualcomm-linux/kernel-topics.git"
+    branch: early/hwe/staging/nord
+    sha: ab252be2b25f774953b9baa7eef36f56dbcbf0a5
+    tag: null
+    depends_on: []
