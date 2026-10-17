@@ -514,9 +514,17 @@ class Runner:
         sys.path.insert(0, HERE)
         try:
             import importlib.util
-            spec = importlib.util.spec_from_file_location("bootstrap_mod", bootstrap)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            # Loading the module would otherwise drop a __pycache__ directory
+            # into scripts/, which is not something a test should leave behind
+            # in a tree that has no .gitignore.
+            prev = sys.dont_write_bytecode
+            sys.dont_write_bytecode = True
+            try:
+                spec = importlib.util.spec_from_file_location("bootstrap_mod", bootstrap)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+            finally:
+                sys.dont_write_bytecode = prev
         except Exception as exc:  # noqa: BLE001
             self.check("bootstrap module imports", False, str(exc))
             return
