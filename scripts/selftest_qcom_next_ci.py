@@ -350,6 +350,22 @@ def main(argv: Optional[List[str]] = None) -> int:
          "workflow_dispatch" in prune_raw and "dry_run" in prune_raw)
     t.ok("prune targets the staging repo by default", CANDIDATE_REPO in prune_raw)
 
+    # Retention must not destroy the artifact publication needs. Publication
+    # happens after the integrator merges the PR, which closes it, so deleting
+    # on close would remove the tested candidate at the moment it is required.
+    t.ok("prune has a grace period after a PR closes",
+         "MIN_CLOSED_AGE_HOURS" in prune_raw and "min_closed_age_hours" in prune_raw)
+    t.ok("prune keeps a recently closed PR's candidate",
+         "publication window" in prune_raw)
+    t.ok("prune never deletes the currently published tree",
+         "published_sha" in prune_raw and "currently published" in prune_raw)
+    t.ok("prune resolves the published ref from the production repo",
+         "PUBLISHED_REPO" in prune_raw and "PUBLISHED_REF" in prune_raw)
+    t.ok("prune warns when the published-tree guard cannot be applied",
+         "guard is inactive" in prune_raw)
+    t.ok("prune no longer deletes purely because a PR is closed",
+         'closed) reason="PR #${pr_number} is closed"' not in prune_raw)
+
     # ------------------------------------------------ sync mode classification
     print("\n[sync mode classification]")
     # Extract the classifier's logic and run it directly. The sync action is

@@ -5,13 +5,25 @@
 #
 #     qcom-next-candidate/pr-<number>-<short-sha>
 #
-# to the candidate kernel repository. Those refs are build inputs with no value
-# once their PR is closed, and left alone they accumulate indefinitely in a
-# kernel-sized repository.
+# to the candidate kernel repository. Those refs are build inputs, and left
+# alone they accumulate indefinitely in a kernel-sized repository.
 #
-# A ref is deleted when its PR is closed or merged, or when it is older than
-# --max-age-days, whichever comes first. Refs whose PR is still open are kept
-# regardless of age, since publication may still need to re-verify them.
+# Retention policy, and why it is not simply "delete when the PR closes":
+# publication happens *after* the integrator merges the config PR, and it
+# publishes the exact candidate commit that passed the gates. Merging the PR
+# closes it, so deleting on close would remove the tested tree at the moment it
+# is needed, and would leave nothing to republish if publication had to be
+# retried.
+#
+# A ref is therefore kept while any of these hold:
+#
+#   * its PR is still open                       (publication has not happened)
+#   * its PR closed less than --min-closed-age-hours ago
+#                                                (publication window / retries)
+#   * it is the commit currently published as qcom-next
+#                                                (this is the live tree)
+#
+# Otherwise it is deleted once older than --max-age-days.
 name: Prune qcom-next candidate refs
 
 on:
@@ -25,10 +37,25 @@ on:
         type: string
         default: qualcomm-linux-stg/kernel
         required: false
+      published_repo:
+        description: Repository holding the published qcom-next branch
+        type: string
+        default: qualcomm-linux/kernel
+        required: false
+      published_ref:
+        description: Published branch that must never be pruned
+        type: string
+        default: qcom-next
+        required: false
       max_age_days:
-        description: Delete refs older than this many days even if the PR is open
+        description: Delete refs older than this many days
         type: string
         default: '7'
+        required: false
+      min_closed_age_hours:
+        description: Grace period after a PR closes, to let publication run or be retried
+        type: string
+        default: '48'
         required: false
       dry_run:
         description: Report what would be deleted without deleting it
@@ -49,7 +76,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CANDIDATE_REPO: ${{ inputs.candidate_repo || 'qualcomm-linux-stg/kernel' }}
+      PUBLISHED_REPO: ${{ inputs.published_repo || 'qualcomm-linux/kernel' }}
+      PUBLISHED_REF: ${{ inputs.published_ref || 'qcom-next' }}
       MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
+      MIN_CLOSED_AGE_HOURS: ${{ inputs.min_closed_age_hours || '48' }}
       # Scheduled runs default to actually deleting; manual runs default to a
       # dry run so an operator cannot delete a batch of refs by accident.
       DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run && 'true' || 'false') || 'false' }}
@@ -59,12 +89,29 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "candidate repo : $CANDIDATE_REPO"
-          echo "max age (days) : $MAX_AGE_DAYS"
-          echo "dry run        : $DRY_RUN"
+          echo "candidate repo    : $CANDIDATE_REPO"
+          echo "published         : $PUBLISHED_REPO @ $PUBLISHED_REF"
+          echo "max age (days)    : $MAX_AGE_DAYS"
+          echo "closed grace (h)  : $MIN_CLOSED_AGE_HOURS"
+          echo "dry run           : $DRY_RUN"
           echo ""
 
-          cutoff_epoch=$(( $(date -u +%s) - MAX_AGE_DAYS * 86400 ))
+          now_epoch=$(date -u +%s)
+          cutoff_epoch=$(( now_epoch - MAX_AGE_DAYS * 86400 ))
+          closed_cutoff=$(( now_epoch - MIN_CLOSED_AGE_HOURS * 3600 ))
+
+          # The live qcom-next commit must never be pruned: it is the tree that
+          # is currently published, and the only thing a rollback could restore.
+          published_sha=$(gh api \
+              "repos/${PUBLISHED_REPO}/git/ref/heads/${PUBLISHED_REF}" \
+              --jq '.object.sha' 2>/dev/null || echo "")
+          if [ -n "$published_sha" ]; then
+            echo "published qcom-next sha: $published_sha"
+          else
+            echo "warning: could not resolve ${PUBLISHED_REPO}@${PUBLISHED_REF};" \
+                 "the published-tree guard is inactive for this run"
+          fi
+          echo ""
 
           # Paginate; a busy period can leave well over 100 candidate refs.
           refs=$(gh api --paginate \
@@ -88,6 +135,14 @@ jobs:
                         | sed -n 's#^qcom-next-candidate/pr-\([0-9]\{1,\}\)-.*#\1#p')
 
             sha=$(gh api "repos/${CANDIDATE_REPO}/git/${ref}" --jq '.object.sha' 2>/dev/null || echo "")
+
+            # Guard 1: never prune the tree that is currently published.
+            if [ -n "$sha" ] && [ -n "$published_sha" ] && [ "$sha" = "$published_sha" ]; then
+              echo "keep   $branch - currently published as $PUBLISHED_REF"
+              kept=$((kept + 1))
+              continue
+            fi
+
             commit_date=""
             if [ -n "$sha" ]; then
               commit_date=$(gh api "repos/${CANDIDATE_REPO}/commits/${sha}" \
@@ -98,30 +153,44 @@ jobs:
             if [ -n "$commit_date" ]; then
               age_epoch=$(date -u -d "$commit_date" +%s 2>/dev/null || echo 0)
             fi
+            too_old=0
+            if [ "$age_epoch" -gt 0 ] && [ "$age_epoch" -lt "$cutoff_epoch" ]; then
+              too_old=1
+            fi
 
             reason=""
             if [ -n "$pr_number" ]; then
-              state=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
-                        --jq '.state' 2>/dev/null || echo "unknown")
+              pr_json=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" \
+                          --jq '{state: .state, closed_at: .closed_at}' 2>/dev/null || echo '{}')
+              state=$(printf '%s' "$pr_json" | jq -r '.state // "unknown"')
+              closed_at=$(printf '%s' "$pr_json" | jq -r '.closed_at // ""')
+
               case "$state" in
-                closed) reason="PR #${pr_number} is closed" ;;
-                open)
-                  if [ "$age_epoch" -gt 0 ] && [ "$age_epoch" -lt "$cutoff_epoch" ]; then
-                    reason="older than ${MAX_AGE_DAYS}d (PR #${pr_number} still open)"
+                closed)
+                  closed_epoch=0
+                  if [ -n "$closed_at" ] && [ "$closed_at" != "null" ]; then
+                    closed_epoch=$(date -u -d "$closed_at" +%s 2>/dev/null || echo 0)
                   fi
+                  # Guard 2: leave a window after the merge so publication can
+                  # run, and be retried, against the tested candidate.
+                  if [ "$closed_epoch" -gt 0 ] && [ "$closed_epoch" -ge "$closed_cutoff" ]; then
+                    echo "keep   $branch - PR #${pr_number} closed less than ${MIN_CLOSED_AGE_HOURS}h ago (publication window)"
+                    kept=$((kept + 1))
+                    continue
+                  fi
+                  reason="PR #${pr_number} closed over ${MIN_CLOSED_AGE_HOURS}h ago"
+                  ;;
+                open)
+                  [ "$too_old" -eq 1 ] && reason="older than ${MAX_AGE_DAYS}d (PR #${pr_number} still open)"
                   ;;
                 *)
                   # Unknown PR state: fall back to age alone rather than
                   # deleting something that might still be in use.
-                  if [ "$age_epoch" -gt 0 ] && [ "$age_epoch" -lt "$cutoff_epoch" ]; then
-                    reason="older than ${MAX_AGE_DAYS}d (PR #${pr_number} state unknown)"
-                  fi
+                  [ "$too_old" -eq 1 ] && reason="older than ${MAX_AGE_DAYS}d (PR #${pr_number} state unknown)"
                   ;;
               esac
             else
-              if [ "$age_epoch" -gt 0 ] && [ "$age_epoch" -lt "$cutoff_epoch" ]; then
-                reason="older than ${MAX_AGE_DAYS}d (no PR number in the ref name)"
-              fi
+              [ "$too_old" -eq 1 ] && reason="older than ${MAX_AGE_DAYS}d (no PR number in the ref name)"
             fi
 
             if [ -z "$reason" ]; then
@@ -153,9 +222,11 @@ jobs:
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Repository | \`$CANDIDATE_REPO\` |"
+            echo "| Candidate repository | \`$CANDIDATE_REPO\` |"
+            echo "| Published tree | \`$PUBLISHED_REPO\` @ \`$PUBLISHED_REF\` |"
             echo "| Mode | $([ "$DRY_RUN" = "true" ] && echo 'dry run' || echo 'delete') |"
             echo "| Max age | ${MAX_AGE_DAYS} days |"
+            echo "| Grace after PR close | ${MIN_CLOSED_AGE_HOURS} hours |"
             echo "| Refs examined | $total |"
             echo "| Kept | $kept |"
             echo "| Deleted | $deleted |"
