@@ -62,6 +62,16 @@ info() { printf '%s\n' "$*"; }
 step() { printf '\n==> %s\n' "$*"; }
 dbg()  { [ "$VERBOSE" -eq 1 ] && printf '    %s\n' "$*" || true; }
 
+# ci-merge's own output is the only record of why a merge failed, so show it on
+# every failure path rather than only pointing at a file that a CI runner
+# discards when the job ends.
+dump_merge_tail() {
+    [ -n "${MERGE_LOG:-}" ] && [ -f "$MERGE_LOG" ] || return 0
+    printf '\n--- last 60 lines of %s ---\n' "$MERGE_LOG" >&2
+    tail -60 "$MERGE_LOG" >&2
+    printf -- '--- end of ci-merge output ---\n' >&2
+}
+
 usage() {
     sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
@@ -435,7 +445,7 @@ info "up to date  : $NOTHING_COUNT"
 info "conflicts   : $CONFLICT_COUNT"
 
 if ! git -C "$KERNEL_DIR" show-ref --verify --quiet "refs/heads/$INTEG_BRANCH"; then
-    tail -40 "$MERGE_LOG" >&2
+    dump_merge_tail
     fail "ci-merge did not create the integration branch '$INTEG_BRANCH'"
 fi
 
@@ -542,6 +552,7 @@ info "  topic-shas.tsv topic -> pinned sha"
 info "  summary.md     Markdown summary"
 
 if [ "$VERIFY_ERRORS" -gt 0 ]; then
+    dump_merge_tail
     fail "$VERIFY_ERRORS pin(s) are not present in the generated tree; the tree does not match the config"
 fi
 
@@ -555,6 +566,7 @@ if [ "$CONFLICT_COUNT" -gt 0 ]; then
 fi
 
 if [ "$CI_RC" -ne 0 ]; then
+    dump_merge_tail
     fail "ci-merge exited $CI_RC despite no reported conflict; see $MERGE_LOG"
 fi
 

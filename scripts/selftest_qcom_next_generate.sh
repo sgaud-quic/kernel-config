@@ -43,7 +43,12 @@ no()   { printf '  FAIL  %s\n' "$*"; FAIL=$((FAIL + 1)); }
 check() {  # check <label> <condition-rc> [detail-file]
     if [ "$2" -eq 0 ]; then ok "$1"; else
         no "$1"
-        [ -n "${3:-}" ] && [ -f "$3" ] && sed -n '1,25p' "$3" | sed 's/^/          /'
+        # Dump the whole log. The fixtures are small, and an excerpt hid the
+        # real cause behind the banner for a full CI cycle: the first 25 lines
+        # are all preamble, and the failure is always at the end.
+        if [ -n "${3:-}" ] && [ -f "$3" ]; then
+            sed 's/^/          /' "$3"
+        fi
     fi
 }
 
