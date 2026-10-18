@@ -156,6 +156,21 @@ fi
 CI_MERGE="$AUTOMERGE_DIR/ci-merge"
 [ -x "$CI_MERGE" ] || [ -f "$CI_MERGE" ] || die "ci-merge not found at $CI_MERGE (use --automerge)"
 
+# ci-merge varies between automerge revisions, and depending on a feature that
+# only some of them have is how this script first broke in CI: it hardcoded -p,
+# which exists in some forks but not in qualcomm-linux/automerge, and getopt
+# rejected it with "invalid option -- 'p'" before anything ran. Probe instead.
+#
+#   --pass/-p  continue past a conflicting topic so one run reports every
+#              conflict. Without it ci-merge stops at the first one.
+#   "Merge successful : <name> : <sha> : <n>" and "Merge conflict : ..." are
+#              emitted only by revisions carrying the log-parser support.
+#              Others print just "Merge failed, <name> <url> <branch>".
+CI_MERGE_HAS_PASS=0
+CI_MERGE_HAS_SUMMARY=0
+grep -qE 'LONGOPT=.*[,"]pass' "$CI_MERGE" && CI_MERGE_HAS_PASS=1
+grep -q 'Merge successful : ' "$CI_MERGE" && CI_MERGE_HAS_SUMMARY=1
+
 if [ -z "$OUT_DIR" ]; then
     OUT_DIR="$(cd "$KERNEL_DIR/.." && pwd)/qcom-next-candidate"
 fi
@@ -179,6 +194,8 @@ unsent() { [ "${1:-}" = "-" ] && printf '' || printf '%s' "${1:-}"; }
 info "config      : $CONFIG"
 info "kernel dir  : $KERNEL_DIR"
 info "automerge   : $CI_MERGE"
+info "  --pass    : $([ "$CI_MERGE_HAS_PASS" -eq 1 ] && echo 'supported' || echo 'not supported; stops at the first conflict')"
+info "  summary   : $([ "$CI_MERGE_HAS_SUMMARY" -eq 1 ] && echo 'emits per-topic merge lines' || echo 'no per-topic lines; relying on pin verification')"
 info "integ branch: $INTEG_BRANCH"
 info "out dir     : $OUT_DIR"
 
@@ -398,7 +415,14 @@ fi
 # --------------------------------------------------------------------------
 step "Running ci-merge"
 
-CI_ARGS=(-f "$MERGE_CONF" -t head -i "$INTEG_BRANCH" -b "$BASELINE_NAME" -p)
+CI_ARGS=(-f "$MERGE_CONF" -t head -i "$INTEG_BRANCH" -b "$BASELINE_NAME")
+if [ "$CI_MERGE_HAS_PASS" -eq 1 ]; then
+    # Continue past a conflicting topic so a single run reports every conflict.
+    # We still fail afterwards unless --allow-conflicts.
+    CI_ARGS+=(-p)
+else
+    info "this ci-merge has no --pass, so it will stop at the first conflicting topic"
+fi
 if [ "$NO_RERERE" -eq 0 ] && [ -n "$RR_REPO" ]; then
     CI_ARGS+=(-c "$RR_REPO")
 else
@@ -420,16 +444,32 @@ step "Parsing merge results"
 
 MERGED_COUNT=$(grep -c '^Merge successful : ' "$MERGE_LOG" 2>/dev/null || true)
 NOTHING_COUNT=$(grep -c '^Nothing to merge' "$MERGE_LOG" 2>/dev/null || true)
+# Two formats, depending on the automerge revision:
+#   "Merge conflict : <name> : <sha>"        with log-parser support
+#   "Merge failed, <name> <url> <branch>"    everywhere
+# Count both so a conflict is never silently reported as zero.
 CONFLICT_COUNT=$(grep -c '^Merge conflict : ' "$MERGE_LOG" 2>/dev/null || true)
+FAILED_COUNT=$(grep -c '^Merge failed, ' "$MERGE_LOG" 2>/dev/null || true)
 MERGED_COUNT=${MERGED_COUNT:-0}
 NOTHING_COUNT=${NOTHING_COUNT:-0}
 CONFLICT_COUNT=${CONFLICT_COUNT:-0}
+FAILED_COUNT=${FAILED_COUNT:-0}
+CONFLICT_TOTAL=$((CONFLICT_COUNT + FAILED_COUNT))
 
 : > "$CONFLICTS"
-if [ "$CONFLICT_COUNT" -gt 0 ]; then
+if [ "$CONFLICT_TOTAL" -gt 0 ]; then
     {
         echo "# Topics whose merge could not be resolved"
-        grep '^Merge conflict : ' "$MERGE_LOG" | awk -F' : ' '{printf "topic\t%s\t%s\n", $2, $3}'
+        if [ "$CONFLICT_COUNT" -gt 0 ]; then
+            grep '^Merge conflict : ' "$MERGE_LOG" \
+                | awk -F' : ' '{printf "topic\t%s\t%s\n", $2, $3}'
+        fi
+        if [ "$FAILED_COUNT" -gt 0 ]; then
+            # "Merge failed, <name> <url> <branch>"
+            grep '^Merge failed, ' "$MERGE_LOG" \
+                | sed 's/^Merge failed, //' \
+                | awk '{printf "topic\t%s\t%s\n", $1, "unknown"}'
+        fi
         # Present only when ci-merge echoes the failed merge output.
         if grep -q '^CONFLICT' "$MERGE_LOG"; then
             echo "# Conflicting paths reported by git"
@@ -442,7 +482,11 @@ fi
 
 info "merged      : $MERGED_COUNT"
 info "up to date  : $NOTHING_COUNT"
-info "conflicts   : $CONFLICT_COUNT"
+info "conflicts   : $CONFLICT_TOTAL"
+if [ "$CI_MERGE_HAS_SUMMARY" -eq 0 ]; then
+    info "note: this ci-merge emits no per-topic merge lines, so the merged count"
+    info "      is not meaningful; pin verification below is authoritative"
+fi
 
 if ! git -C "$KERNEL_DIR" show-ref --verify --quiet "refs/heads/$INTEG_BRANCH"; then
     dump_merge_tail
@@ -515,11 +559,11 @@ info "digest: $DIGEST"
     echo "| Topics configured | $TOPIC_COUNT |"
     echo "| Topics merged | $MERGED_COUNT |"
     echo "| Already up to date | $NOTHING_COUNT |"
-    echo "| Conflicts | $CONFLICT_COUNT |"
+    echo "| Conflicts | $CONFLICT_TOTAL |"
     echo "| Pins verified | ${VERIFIED:-0} / $TOPIC_COUNT |"
     echo "| Tested-set digest | \`$DIGEST\` |"
     echo ""
-    if [ "$CONFLICT_COUNT" -gt 0 ]; then
+    if [ "$CONFLICT_TOTAL" -gt 0 ]; then
         echo "#### Unresolved conflicts"
         echo ""
         echo "The rerere cache has no recorded resolution for these topics."
@@ -548,7 +592,7 @@ info "  merge.conf     generated conf (disposable)"
 info "  merge.log      ci-merge output"
 info "  tested-set.txt inputs + digest"
 info "  topic-shas.tsv topic -> pinned sha"
-[ "$CONFLICT_COUNT" -gt 0 ] && info "  conflicts.txt  unresolved conflicts"
+[ "$CONFLICT_TOTAL" -gt 0 ] && info "  conflicts.txt  unresolved conflicts"
 info "  summary.md     Markdown summary"
 
 if [ "$VERIFY_ERRORS" -gt 0 ]; then
@@ -556,13 +600,13 @@ if [ "$VERIFY_ERRORS" -gt 0 ]; then
     fail "$VERIFY_ERRORS pin(s) are not present in the generated tree; the tree does not match the config"
 fi
 
-if [ "$CONFLICT_COUNT" -gt 0 ]; then
+if [ "$CONFLICT_TOTAL" -gt 0 ]; then
     if [ "$ALLOW_CONFLICTS" -eq 1 ]; then
-        info "RESULT: generated with $CONFLICT_COUNT unresolved conflict(s) (--allow-conflicts)"
+        info "RESULT: generated with $CONFLICT_TOTAL unresolved conflict(s) (--allow-conflicts)"
         exit 0
     fi
     cat "$CONFLICTS" >&2
-    fail "$CONFLICT_COUNT topic(s) could not be merged. See $CONFLICTS and $SUMMARY"
+    fail "$CONFLICT_TOTAL topic(s) could not be merged. See $CONFLICTS and $SUMMARY"
 fi
 
 if [ "$CI_RC" -ne 0 ]; then

@@ -497,6 +497,97 @@ check "dry run still creates the override pin refs" $?
 
 # ==========================================================================
 say ""
+say "[8] unresolved conflict"
+
+# Two topics add the same file with different content, so the merge cannot be
+# resolved and no rerere resolution exists. Generation must fail and name both
+# the topic and the path. This also covers the two log formats ci-merge
+# revisions use:
+#   "Merge conflict : <name> : <sha>"      with log-parser support
+#   "Merge failed, <name> <url> <branch>"  everywhere else
+#
+# mkdir is required: checking out the base removes the empty drivers/
+# directories, and a redirect into a missing directory fails silently here
+# because this script does not use set -e.
+make_conflict_topic() {   # make_conflict_topic <branch> <content>
+    G "$UPSTREAM" checkout -q -b "$1" "$BASE_OLD"
+    mkdir -p "$UPSTREAM/drivers"
+    printf 'line1\n%s\nline3\n' "$2" > "$UPSTREAM/drivers/shared.c"
+    G "$UPSTREAM" add -A
+    G "$UPSTREAM" commit -q -m "$1: add shared.c"
+    G "$UPSTREAM" rev-parse HEAD
+}
+
+CA=$(make_conflict_topic conflict/alpha ALPHA)
+CB=$(make_conflict_topic conflict/beta BETA)
+G "$UPSTREAM" checkout -q main
+
+# Guard the fixture itself: if the file never landed there is nothing to
+# conflict over and the rest of this section would pass for the wrong reason.
+G "$UPSTREAM" cat-file -e "$CA:drivers/shared.c" 2>/dev/null
+check "fixture: conflict/alpha carries drivers/shared.c" $?
+G "$UPSTREAM" cat-file -e "$CB:drivers/shared.c" 2>/dev/null
+check "fixture: conflict/beta carries drivers/shared.c" $?
+
+CFG_CONF="$WORK/qcom-next-conflict.yaml"
+cat > "$CFG_CONF" <<EOF
+schema_version: 1
+
+base:
+  repo: "file://$UPSTREAM"
+  branch: main
+  tag: v7.3-rc6
+  sha: $BASE_OLD
+
+promotion_state: open
+
+rerere_cache:
+  repo: "file://$RERERE"
+  ref: master
+
+topics:
+  - name: conflict/alpha
+    repo: "file://$UPSTREAM"
+    branch: conflict/alpha
+    sha: $CA
+    tag: null
+    depends_on: []
+  - name: conflict/beta
+    repo: "file://$UPSTREAM"
+    branch: conflict/beta
+    sha: $CB
+    tag: null
+    depends_on: []
+EOF
+
+KDIR9="$WORK/kernel-conflict"
+OUT9="$WORK/out-conflict"
+fresh_kernel "$KDIR9"
+if run_generate "$CFG_CONF" "$KDIR9" "$OUT9" "$WORK/gen-conflict.log"; then
+    no "generation must fail on an unresolved conflict"
+else
+    ok "generation fails on an unresolved conflict"
+fi
+
+[ -s "$OUT9/conflicts.txt" ]
+check "conflicts.txt is written" $?
+
+grep -q 'conflict/beta' "$OUT9/conflicts.txt" 2>/dev/null
+check "the conflicting topic is named" $? "$OUT9/conflicts.txt"
+
+grep -q 'drivers/shared.c' "$OUT9/conflicts.txt" 2>/dev/null
+check "the conflicting path is recorded" $? "$OUT9/conflicts.txt"
+
+grep -q 'drivers/shared.c' "$OUT9/summary.md" 2>/dev/null
+check "the path reaches summary.md for the PR" $? "$OUT9/summary.md"
+
+# The count must not be reported as zero just because this ci-merge revision
+# uses the other log format.
+grep -qE 'conflicts   : [1-9]' "$WORK/gen-conflict.log"
+check "the conflict count is non-zero" $? "$WORK/gen-conflict.log"
+
+# ==========================================================================
+say ""
 say "============================================================"
 printf 'ran %d checks: %d passed, %d failed\n' "$((PASS + FAIL))" "$PASS" "$FAIL"
 if [ "$FAIL" -eq 0 ]; then
