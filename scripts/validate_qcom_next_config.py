@@ -337,6 +337,50 @@ def check_dependencies(topics: Sequence[dict], f: Findings) -> None:
 
 
 # ---------------------------------------------------------------------------
+# V5 (structural half) — unpinned topics
+# ---------------------------------------------------------------------------
+def check_pins(cfg: dict, topics: Sequence[dict], f: Findings) -> None:
+    """Report topics and a baseline that carry no concrete SHA.
+
+    Whether a SHA *exists* on its remote needs the network, but whether one is
+    present at all does not. Checking it here means an unpinned topic is
+    reported during validation rather than surfacing much later as a tree
+    generation failure.
+
+    The schema permits a null SHA so a maintainer can add a topic without
+    resolving it by hand (FR-INT-03). Resolution belongs to the bootstrap and
+    promotion steps, which record the tip and then pin and tag it. Tree
+    generation requires every pin to be concrete, because consuming a branch tip
+    at merge time would make the result depend on when it ran rather than on the
+    config (NFR-01).
+    """
+    f.ran("V5")
+
+    base = cfg.get("base") or {}
+    if base.get("sha") is None:
+        f.error(
+            "V5",
+            "base.sha is null. Tree generation needs a concrete baseline commit; "
+            "pin it before this config can produce a tree.",
+        )
+
+    unpinned = [t.get("name", "<unnamed>") for t in topics if t.get("sha") is None]
+    for name in unpinned:
+        f.warn(
+            "V5",
+            f"{name}: sha is null, so this topic is not pinned. Tree generation "
+            "will refuse the config until it is resolved to a concrete commit "
+            "and tagged.",
+        )
+    if unpinned:
+        f.info(
+            "V5",
+            f"{len(unpinned)} of {len(topics)} topic(s) are unpinned; "
+            "scripts/generate_qcom_next_tree.sh exits non-zero in that state",
+        )
+
+
+# ---------------------------------------------------------------------------
 # V3 / V4 / V5 — remote reality checks
 # ---------------------------------------------------------------------------
 def check_remotes(cfg: dict, topics: Sequence[dict], index: RemoteIndex,
@@ -360,7 +404,7 @@ def check_remotes(cfg: dict, topics: Sequence[dict], index: RemoteIndex,
             f.error("V4", f"base.branch {base_branch!r} does not exist in {base_repo}")
 
         if base_sha is None:
-            f.error("V3", "base.sha is null; an RC uprev must pin a concrete baseline commit")
+            pass  # reported unconditionally by check_pins
         elif isinstance(base_sha, str):
             tags = index.tags(base_repo)
             if tags is None:
@@ -415,19 +459,15 @@ def check_remotes(cfg: dict, topics: Sequence[dict], index: RemoteIndex,
 
         tip = heads.get(branch) if isinstance(branch, str) else None
 
-        # V5 — new topic with no pinned sha
+        # V5 — new topic with no pinned sha. check_pins already warned that it
+        # is unpinned; here we can additionally report what it would resolve to,
+        # which is what the maintainer needs in order to pin it.
         if sha is None:
             if tip:
                 f.info(
                     "V5",
-                    f"{name}: sha is null (new topic); branch tip is {tip}. "
-                    f"Record this sha and tag it as "
-                    f"{branch}-<kernel-version>-<YYYYMMDD> before promotion",
-                )
-                f.warn(
-                    "V5",
-                    f"{name}: sha is null; the branch tip will be used. Pin and tag it "
-                    "so the consumed commit is reproducible (FR-INT-03)",
+                    f"{name}: branch tip is {tip}. Record this sha and tag it as "
+                    f"{branch}-<kernel-version>-<YYYYMMDD>",
                 )
             continue
 
@@ -632,6 +672,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     # failure because the fields they read may be malformed.
     check_duplicates(topics, f)
     check_dependencies(topics, f)
+    check_pins(cfg, topics, f)
 
     if args.offline:
         f.info("V3", "offline mode: remote SHA/tag/branch checks skipped")
