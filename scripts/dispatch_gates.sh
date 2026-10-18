@@ -39,7 +39,7 @@ CANDIDATE_REF=""
 CANDIDATE_SHA=""
 WORKFLOW_REPO="qualcomm-linux/kernel-config"
 WORKFLOW_GIT_REF=""
-GATES="pre-merge"
+GATES="build"
 PR_NUMBER="0"
 TIMEOUT=10800          # 3h; a full kernel build plus LAVA can be slow
 POLL_INTERVAL=60
@@ -70,8 +70,8 @@ Options:
                                 Defaults to the repo's default branch; pass the
                                 branch under test so the gates use its version
                                 of the workflow rather than main.
-  --gates LIST                  comma-separated: pre-merge, yocto, ubuntu
-                                (default: pre-merge)
+  --gates LIST                  comma-separated: build, pre-merge, yocto,
+                                ubuntu (default: build)
   --pr NUMBER                   PR number passed to the gates (default: 0)
   --timeout SECONDS             overall wait budget (default: 10800)
   --poll-interval SECONDS       status poll interval (default: 60)
@@ -87,11 +87,18 @@ Requires the gh CLI, authenticated with a token that can dispatch workflows in
 Note: --workflow-ref controls which revision of the *workflow file* runs. The
 composite actions those workflows call are pinned inside them (build.yml and
 test.yml reference .../actions/...@main), so they are not affected by this.
+qcom-next-gates.yml is the exception: it calls its actions locally, so it
+honours --workflow-ref all the way down.
 
 Gate -> workflow file -> status context:
+  build      qcom-next-gates.yml   "qcom-next-build"
   pre-merge  pre_merge.yml         "pre-merge"
   yocto      pre-merge-yocto.yml   "Yocto Build Generation"
   ubuntu     pre-merge-ubuntu.yml  "Ubuntu Package Generation"
+
+Only "build" can test a candidate outside qualcomm-linux/kernel. The other
+three are rejected for any other candidate repo rather than reporting a green
+result for work they silently skipped.
 
 Exit 0 all gates green, 1 a gate failed or timed out, 2 usage error.
 EOF
@@ -131,6 +138,7 @@ esac
 # gate -> "workflow file|status context"
 gate_spec() {
     case "$1" in
+        build)     echo "qcom-next-gates.yml|qcom-next-build" ;;
         pre-merge) echo "pre_merge.yml|pre-merge" ;;
         yocto)     echo "pre-merge-yocto.yml|Yocto Build Generation" ;;
         ubuntu)    echo "pre-merge-ubuntu.yml|Ubuntu Package Generation" ;;
@@ -138,13 +146,34 @@ gate_spec() {
     esac
 }
 
+# Gates that only work against a pull request in qualcomm-linux/kernel.
+# sync@main switches on inputs.repo matching one of two hardcoded names and
+# no-ops for anything else, so the build would run on an empty workspace, and
+# pre_merge.yml guards its test job with inputs.repo == 'qualcomm-linux/kernel',
+# so boot and functional silently drop out while the gate can still report
+# success. Refusing up front is better than recording a false green.
+PR_CENTRIC_GATES="pre-merge yocto ubuntu"
+PR_CENTRIC_REPO="qualcomm-linux/kernel"
+
 SELECTED=()
 IFS=',' read -r -a REQUESTED <<< "$GATES"
 for g in "${REQUESTED[@]}"; do
     g="$(printf '%s' "$g" | tr -d '[:space:]')"
     [ -n "$g" ] || continue
     spec="$(gate_spec "$g")"
-    [ -n "$spec" ] || die "unknown gate '$g' (valid: pre-merge, yocto, ubuntu)"
+    [ -n "$spec" ] || die "unknown gate '$g' (valid: build, pre-merge, yocto, ubuntu)"
+    case " $PR_CENTRIC_GATES " in
+        *" $g "*)
+            if [ "$CANDIDATE_REPO" != "$PR_CENTRIC_REPO" ]; then
+                die "gate '$g' cannot test a candidate in $CANDIDATE_REPO.
+  It resolves its composite actions at @main, where sync only handles
+  $PR_CENTRIC_REPO and qualcomm-linux/kernel-topics, and pre_merge.yml runs its
+  test job only for $PR_CENTRIC_REPO. The build would run on an empty workspace
+  and boot/functional would be skipped while the gate still reported success.
+  Use --gates build for a staging candidate."
+            fi
+            ;;
+    esac
     SELECTED+=("$g|$spec")
 done
 [ "${#SELECTED[@]}" -gt 0 ] || die "no gates selected"

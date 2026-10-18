@@ -65,7 +65,7 @@ on:
         default: qualcomm-linux-stg/kernel
         required: false
       gates:
-        description: "Gates to run: all, pre-merge, yocto, ubuntu, none"
+        description: "Gates to run: build, pre-merge, yocto, ubuntu, all, none"
         type: string
         default: none
         required: false
@@ -362,7 +362,11 @@ jobs:
         run: |
           set -euo pipefail
           case "$REQUESTED" in
-            all)  gates="pre-merge,yocto,ubuntu" ;;
+            # "build" is the only gate that can test a candidate in a staging
+            # repo; the others resolve their actions at @main and are hardwired
+            # to qualcomm-linux/kernel. dispatch_gates.sh rejects them for any
+            # other candidate repo rather than reporting a false green.
+            all)  gates="build,pre-merge,yocto,ubuntu" ;;
             none) gates="" ;;
             *)    gates="$REQUESTED" ;;
           esac

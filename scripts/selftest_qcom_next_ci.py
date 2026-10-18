@@ -39,11 +39,14 @@ ACT_DIR = os.path.join(REPO, ".github", "actions")
 PR_CI = os.path.join(WF_DIR, "qcom-next-pr-ci.yml")
 PRUNE = os.path.join(WF_DIR, "prune-qcom-next-candidates.yml")
 VALIDATE = os.path.join(WF_DIR, "validate-qcom-next-config.yml")
+GATES_WF = os.path.join(WF_DIR, "qcom-next-gates.yml")
 SYNC = os.path.join(ACT_DIR, "sync", "action.yml")
 STATUS_ACTION = os.path.join(ACT_DIR, "workflow_status", "action.yml")
 DISPATCH = os.path.join(HERE, "dispatch_gates.sh")
 
 CANDIDATE_REPO = "qualcomm-linux-stg/kernel"
+# The repo the PR-centric gates are hardwired to; only they can run there.
+PROD_REPO = "qualcomm-linux/kernel"
 
 
 class T:
@@ -349,7 +352,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = run(["bash", DISPATCH, "--help"])
     t.ok("--help exits 0", p.returncode == 0, p.stdout + p.stderr)
 
-    p = run(["bash", DISPATCH, "--candidate-repo", CANDIDATE_REPO,
+    # The PR-centric gates are only legal against the production kernel repo,
+    # so the dry run that inspects their wiring has to use that repo.
+    p = run(["bash", DISPATCH, "--candidate-repo", PROD_REPO,
              "--candidate-ref", "qcom-next-candidate/pr-1-abc",
              "--candidate-sha", sha, "--gates", "pre-merge,yocto,ubuntu",
              "--dry-run"])
@@ -358,10 +363,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.ok("dry run names all three workflows",
          all(w in out for w in ("pre_merge.yml", "pre-merge-yocto.yml",
                                 "pre-merge-ubuntu.yml")), out)
-    t.ok("dry run targets the staging repo", CANDIDATE_REPO in out, out)
+    t.ok("dry run targets the candidate repo", PROD_REPO in out, out)
     t.ok("dry run shows the yocto base input", "base=tag" in out, out)
     t.ok("dry run lists the status contexts it will poll",
          "Yocto Build Generation" in out, out)
+
+    # The build gate is the one that works against a staging candidate.
+    p = run(["bash", DISPATCH, "--candidate-repo", CANDIDATE_REPO,
+             "--candidate-ref", "qcom-next-candidate/pr-1-abc",
+             "--candidate-sha", sha, "--gates", "build", "--dry-run"])
+    t.ok("build gate dry run exits 0", p.returncode == 0, p.stdout + p.stderr)
+    bout = p.stdout
+    t.ok("build gate targets the candidate workflow",
+         "qcom-next-gates.yml" in bout, bout)
+    t.ok("build gate polls the qcom-next-build context",
+         "qcom-next-build" in bout, bout)
+    t.ok("build gate targets the staging repo", CANDIDATE_REPO in bout, bout)
+    t.ok("build gate does not request the yocto base input",
+         "base=tag" not in bout, bout)
+
+    # Refusing beats a false green: these gates would skip boot/functional and
+    # build an empty workspace for a non-production repo.
+    for g in ("pre-merge", "yocto", "ubuntu"):
+        p = run(["bash", DISPATCH, "--candidate-repo", CANDIDATE_REPO,
+                 "--candidate-ref", "r", "--candidate-sha", sha,
+                 "--gates", g, "--dry-run"])
+        t.ok(f"gate '{g}' refused for a staging candidate",
+             p.returncode == 2, f"rc={p.returncode}")
+        t.ok(f"gate '{g}' refusal explains the cause",
+             "cannot test a candidate in" in (p.stdout + p.stderr),
+             p.stdout + p.stderr)
 
     # argument validation
     for label, argv_, want in [
@@ -604,6 +635,72 @@ def main(argv: Optional[List[str]] = None) -> int:
                 offenders.append((i, line.strip()[:60]))
         t.ok(f"{label}: every inputs reference is in a step env",
              not offenders, str(offenders[:3]))
+
+    # ------------------------------------------------------ candidate gate wf
+    print("\n[candidate gate workflow]")
+    t.ok("qcom-next-gates.yml exists", os.path.exists(GATES_WF), GATES_WF)
+    if os.path.exists(GATES_WF):
+        gates_wf = load_wf(GATES_WF)
+        gtrig = triggers(gates_wf)
+        gjobs = gates_wf.get("jobs") or {}
+        gins = ((gtrig.get("workflow_dispatch") or {}).get("inputs")) or {}
+
+        # The dispatcher always sends these four, so the workflow has to accept
+        # them or gh workflow run fails before anything is queued.
+        for k in ("pr", "sha", "ref", "repo"):
+            t.ok(f"gates wf accepts input '{k}'", k in gins, str(sorted(gins)))
+
+        # A candidate is a branch in another repo, so nothing here may assume a
+        # PR in the repo under build; that is what made pre_merge.yml unusable.
+        raw_g = open(GATES_WF, encoding="utf-8").read()
+        t.ok("gates wf does not use the PR-centric sync action",
+             "actions/sync" not in raw_g, "sync@main no-ops for other repos")
+        t.ok("gates wf resolves its actions locally, honouring --workflow-ref",
+             "kernel-config/.github/actions" not in raw_g,
+             "an @main reference would ignore the branch under test")
+
+        # Ordering matters: the root checkout cleans the workspace, so a
+        # candidate placed first would be wiped.
+        bsteps = (gjobs.get("build") or {}).get("steps") or []
+        paths = [(s.get("with") or {}).get("path") for s in bsteps
+                 if str(s.get("uses", "")).startswith("actions/checkout")]
+        t.ok("gates wf checks out kernel-config before the candidate",
+             len(paths) >= 2 and paths[0] in (None, "", ".") and paths[1],
+             f"checkout paths in order: {paths}")
+
+        # The status has to land on the commit the dispatcher polls.
+        t.ok("gates wf reports on the requested sha, not HEAD",
+             "sha: ${{ inputs.sha }}" in raw_g)
+        t.ok("gates wf verifies the checkout equals the requested sha",
+             "was asked for" in raw_g,
+             "a gate result must refer to the exact tested commit")
+        t.ok("gates wf posts the status to the candidate repo",
+             "repo: ${{ inputs.repo }}" in raw_g)
+
+        # always() on the terminal job, so a cancelled build still reports.
+        fin = gjobs.get("finish") or {}
+        t.ok("gates wf reports a result even when the build is cancelled",
+             "always()" in str(fin.get("if", "")), str(fin.get("if")))
+        t.ok("gates wf derives the status from the build result",
+             "needs.build.result" in str(
+                 [s.get("with") for s in (fin.get("steps") or [])]))
+
+        # The context must match what dispatch_gates.sh polls for.
+        t.ok("gates wf check name matches the dispatcher's context",
+             (gates_wf.get("env") or {}).get("CHECK_NAME") == "qcom-next-build",
+             str(gates_wf.get("env")))
+
+    # ------------------------------------------------------ gate dispatch map
+    print("\n[gate dispatch mapping]")
+    dg = open(os.path.join(REPO, "scripts", "dispatch_gates.sh"),
+              encoding="utf-8").read()
+    t.ok("dispatcher maps the build gate to the candidate workflow",
+         "qcom-next-gates.yml|qcom-next-build" in dg)
+    t.ok("dispatcher refuses PR-centric gates for another repo",
+         "PR_CENTRIC_GATES" in dg and "cannot test a candidate in" in dg,
+         "otherwise boot/functional silently skip and the gate still passes")
+    t.ok("pr-ci 'all' includes the build gate",
+         "build,pre-merge,yocto,ubuntu" in open(PR_CI, encoding="utf-8").read())
 
     # ------------------------------------------ single pull_request entry point
     print("\n[single pull_request entry point]")
