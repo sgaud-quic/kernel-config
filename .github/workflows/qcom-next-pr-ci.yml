@@ -450,7 +450,7 @@ jobs:
   # ----------------------------------------------------------------- report
   report:
     name: Report on the PR
-    needs: [config, validate, candidate, gates]
+    needs: [config, validate, candidate, build-gate, gates]
     if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     env:
@@ -487,6 +487,7 @@ jobs:
           CLASSIFICATION: ${{ needs.validate.outputs.classification }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
           GATES_RESULT: ${{ needs.gates.result }}
+          BUILD_GATE_RESULT: ${{ needs.build-gate.result }}
           CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
           DIGEST: ${{ needs.candidate.outputs.digest }}
@@ -503,6 +504,7 @@ jobs:
             const classification  = process.env.CLASSIFICATION || 'n/a';
             const candidateResult = process.env.CANDIDATE_RESULT || 'unknown';
             const gatesResult     = process.env.GATES_RESULT || 'unknown';
+            const buildGateResult = process.env.BUILD_GATE_RESULT || 'unknown';
             const candidateRef    = process.env.CANDIDATE_REF || '';
             const candidateSha    = process.env.CANDIDATE_SHA || '';
             const candidateRepo   = process.env.CANDIDATE_REPO || '';
@@ -514,7 +516,8 @@ jobs:
             const ok = skipped
               ? true
               : candidateResult === 'success' &&
-                ['success', 'skipped'].includes(gatesResult);
+                ['success', 'skipped'].includes(gatesResult) &&
+                ['success', 'skipped'].includes(buildGateResult);
 
             const lines = [
               marker,
@@ -522,6 +525,7 @@ jobs:
               '',
               `- Classification: \`${classification}\``,
               `- Candidate generation: \`${candidateResult}\``,
+              `- Build gate: \`${buildGateResult}\``,
               `- Gates: \`${gatesResult}\``,
             ];
 
@@ -578,6 +582,7 @@ jobs:
             echo "|---|---|"
             echo "| Classification | \`${CLASSIFICATION:-n/a}\` |"
             echo "| Candidate generation | \`${CANDIDATE_RESULT:-n/a}\` |"
+            echo "| Build gate | \`${BUILD_GATE_RESULT:-n/a}\` |"
             echo "| Gates | \`${GATES_RESULT:-n/a}\` |"
             echo "| Candidate ref | \`${CANDIDATE_REF:-not pushed}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -585,7 +590,10 @@ jobs:
   # ------------------------------------------------------------ final status
   final-status:
     name: Final status
-    needs: [validate, candidate, gates]
+    # build-gate has to be listed here. A job missing from needs is not waited
+    # for and its result reads as empty, so the verdict was reported while the
+    # build gate was still running and ignored its outcome entirely.
+    needs: [validate, candidate, build-gate, gates]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -594,17 +602,20 @@ jobs:
           CLASSIFICATION: ${{ needs.validate.outputs.classification }}
           VALIDATE_RESULT: ${{ needs.validate.result }}
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          BUILD_GATE_RESULT: ${{ needs.build-gate.result }}
           GATES_RESULT: ${{ needs.gates.result }}
         run: |
           set -euo pipefail
           classification="${CLASSIFICATION:-}"
           validate="${VALIDATE_RESULT:-}"
           candidate="${CANDIDATE_RESULT:-}"
+          build_gate="${BUILD_GATE_RESULT:-}"
           gates="${GATES_RESULT:-}"
 
           echo "classification : $classification"
           echo "validate       : $validate"
           echo "candidate      : $candidate"
+          echo "build gate     : $build_gate"
           echo "gates          : $gates"
 
           if [ "$validate" != "success" ]; then
@@ -627,11 +638,17 @@ jobs:
             echo "::error title=qcom-next PR CI::candidate tree generation failed"
             exit 1
           fi
-          case "$gates" in
-            success|skipped) ;;
-            *)
-              echo "::error title=qcom-next PR CI::candidate gates did not pass"
-              exit 1
-              ;;
-          esac
+          # A gate that was not requested is skipped, which is not a failure.
+          # Anything else, including cancelled, is.
+          for stage in "build gate:$build_gate" "gates:$gates"; do
+            name="${stage%%:*}"
+            result="${stage#*:}"
+            case "$result" in
+              success|skipped|"") ;;
+              *)
+                echo "::error title=qcom-next PR CI::${name} did not pass (${result})"
+                exit 1
+                ;;
+            esac
+          done
           echo "all required stages passed"

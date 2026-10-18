@@ -647,6 +647,38 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok(f"{label}: every inputs reference is in a step env",
              not offenders, str(offenders[:3]))
 
+    # ------------------------------------------------- verdict completeness
+    print("\n[verdict completeness]")
+    # A job absent from needs is neither waited for nor readable: its result
+    # evaluates to empty. Omitting a gate from final-status therefore produces
+    # a verdict that is published before the gate finishes and ignores its
+    # outcome, which is a false green rather than a visible wiring error.
+    all_jobs = pr_ci.get("jobs") or {}
+    gate_jobs = sorted(j for j in all_jobs
+                       if "gate" in j and j not in ("report", "final-status"))
+    t.ok("there is at least one gate job", bool(gate_jobs), str(gate_jobs))
+
+    for judge in ("final-status", "report"):
+        jb = all_jobs.get(judge) or {}
+        nd = jb.get("needs") or []
+        if isinstance(nd, str):
+            nd = [nd]
+        blob = json.dumps(jb)
+        for g in gate_jobs:
+            t.ok(f"{judge} waits for '{g}'", g in nd, f"needs={nd}")
+            # Depending on it is not enough; the result has to be consumed.
+            t.ok(f"{judge} consumes the '{g}' result",
+                 f"needs.{g}.result" in blob,
+                 f"{judge} depends on {g} but never reads its result")
+
+    # The verdict must treat a skipped gate as acceptable and anything else,
+    # notably cancelled, as a failure.
+    fs_run = "".join(str(s.get("run", ""))
+                     for s in (all_jobs.get("final-status") or {}).get("steps") or [])
+    t.ok("verdict accepts skipped gates", "success|skipped" in fs_run)
+    t.ok("verdict rejects other gate results",
+         "did not pass" in fs_run, fs_run[:200])
+
     # ------------------------------------------------------ gate split matrix
     print("\n[gate split resolution]")
     # The build gate is called, the rest are dispatched. If the split is wrong
