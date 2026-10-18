@@ -650,13 +650,22 @@ jobs:
             exit 0
           fi
 
-          # The manifest's first parent must be the candidate commit, so the
-          # commit has to be present locally. Fetching just that commit is far
-          # cheaper than cloning the kernel.
+          # The manifest's first parent must be the candidate commit, and
+          # recording verifies that the commit really contains all 50 tested
+          # pins before making it publishable. That check walks ancestry, so it
+          # needs the commit graph.
+          #
+          # --depth 1 was tried first and failed exactly as it should have: with
+          # no history, every pin reported "commit absent from the repository"
+          # and recording refused. A full kernel fetch is impractical on a
+          # hosted runner, so fetch blobless instead -- ancestry needs commits,
+          # not file contents, so no blobs are ever downloaded.
           git init --quiet kernel
           git -C kernel remote add candidate \
               "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${CANDIDATE_REPO}.git"
-          git -C kernel fetch --quiet --depth 1 --no-tags candidate \
+          git -C kernel config remote.candidate.promisor true
+          git -C kernel config remote.candidate.partialclonefilter blob:none
+          git -C kernel fetch --quiet --filter=blob:none --no-tags candidate \
               "+${CANDIDATE_SHA}:refs/tested"
 
           bash scripts/record_tested_candidate.sh \

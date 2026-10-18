@@ -347,6 +347,65 @@ check "publishes to a branch whose head it observed" $? "$WORK/pub-lease.log"
 
 # --------------------------------------------------------------------------
 say ""
+say "[5] recording from a blobless partial clone"
+
+# CI cannot afford a full kernel fetch on a hosted runner, so recording fetches
+# the candidate with --filter=blob:none. A shallow fetch was tried first and
+# broke recording: ancestry could not be walked, so every pin read as absent.
+# This proves the blobless form is sufficient, since the pin checks need the
+# commit graph but never file contents.
+G "$KDIR" config uploadpack.allowFilter true
+G "$KDIR" config uploadpack.allowAnySHA1InWant true
+
+BLOBLESS="$WORK/blobless"
+git init --quiet "$BLOBLESS"
+G "$BLOBLESS" config user.email ci@example.com
+G "$BLOBLESS" config user.name "CI"
+G "$BLOBLESS" remote add candidate "$KDIR"
+G "$BLOBLESS" config remote.candidate.promisor true
+G "$BLOBLESS" config remote.candidate.partialclonefilter blob:none
+
+G "$BLOBLESS" fetch --quiet --filter=blob:none --no-tags candidate \
+    "+${CAND_SHA}:refs/tested" 2>"$WORK/blobless-fetch.log"
+check "a blobless fetch of the candidate succeeds" $? "$WORK/blobless-fetch.log"
+
+bash "$RECORDER" \
+    --kernel-dir "$BLOBLESS" \
+    --tested-set "$TESTED" \
+    --candidate-repo "owner/repo" \
+    --candidate-sha "$CAND_SHA" \
+    --pr 1 \
+    --no-push > "$WORK/record-blobless.log" 2>&1
+check "recording succeeds against a blobless clone" $? "$WORK/record-blobless.log"
+
+G "$BLOBLESS" rev-parse --verify --quiet "refs/qcom-next-tested/$DIGEST" >/dev/null 2>&1
+check "the manifest is created in the blobless clone" $?
+
+# A shallow clone must still be rejected, so the failure that was hit in CI
+# cannot silently come back as a successful recording of an unverified tree.
+SHALLOW="$WORK/shallow"
+git init --quiet "$SHALLOW"
+G "$SHALLOW" config user.email ci@example.com
+G "$SHALLOW" config user.name "CI"
+G "$SHALLOW" remote add candidate "$KDIR"
+if G "$SHALLOW" fetch --quiet --depth 1 --no-tags candidate \
+        "+${CAND_SHA}:refs/tested" 2>/dev/null; then
+    bash "$RECORDER" \
+        --kernel-dir "$SHALLOW" \
+        --tested-set "$TESTED" \
+        --candidate-repo "owner/repo" \
+        --candidate-sha "$CAND_SHA" \
+        --no-push > "$WORK/record-shallow.log" 2>&1
+    [ $? -ne 0 ]
+    check "recording refuses a shallow clone that cannot prove the pins" $?
+    grep -qi "does not contain the tested set" "$WORK/record-shallow.log"
+    check "and says the tested set could not be confirmed" $?
+else
+    say "  SKIP  shallow fetch unsupported here"
+fi
+
+# --------------------------------------------------------------------------
+say ""
 say "============================================================"
 TOTAL=$((PASS + FAIL))
 say "ran $TOTAL checks: $PASS passed, $FAIL failed"
