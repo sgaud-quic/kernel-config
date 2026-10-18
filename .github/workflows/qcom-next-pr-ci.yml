@@ -29,12 +29,14 @@
 #
 #   * SPAT must be able to push branches to the candidate repository and post
 #     commit statuses on it.
-#   * The dispatched gates run their workflow file from the ref given to
-#     gh workflow run, so they follow this branch. The composite actions they
-#     call internally are still resolved at @main inside build.yml and
-#     test.yml; fully un-pinning those needs build.yml restructured to keep
-#     kernel-config in a subdirectory, because the sync action replaces the
-#     workspace with the kernel tree. Gates therefore default to "none".
+#   * The build gate runs by default and is self-contained: qcom-next-gates.yml
+#     references its actions locally, so it follows this branch all the way
+#     down. The PR-centric gates (pre-merge, yocto, ubuntu) resolve their
+#     composite actions at @main inside build.yml and test.yml and are hardwired
+#     to qualcomm-linux/kernel, so they cannot test a staging candidate;
+#     dispatch_gates.sh refuses them for any other candidate repo rather than
+#     reporting a green for work it skipped. Request them explicitly, and only
+#     for a candidate in qualcomm-linux/kernel.
 name: qcom-next config PR CI
 
 on:
@@ -67,7 +69,7 @@ on:
       gates:
         description: "Gates to run: build, pre-merge, yocto, ubuntu, all, none"
         type: string
-        default: none
+        default: build
         required: false
       allow_untagged:
         description: Downgrade missing-tag errors to warnings (migration only)
@@ -131,11 +133,13 @@ jobs:
           candidate_repo="${IN_CANDIDATE_REPO:-}"
           [ -n "$candidate_repo" ] || candidate_repo="qualcomm-linux-stg/kernel"
 
-          # Gates default to off, including for pull_request runs. The gates
-          # resolve their composite actions at @main, so they cannot yet test a
-          # candidate in a staging repo; opt in explicitly once that is fixed.
+          # The build gate runs by default, including on pull_request runs where
+          # no input exists. It is the only gate that can test a candidate in a
+          # staging repo; the PR-centric ones are opt-in and are refused unless
+          # the candidate lives in qualcomm-linux/kernel. Pass gates=none to
+          # generate a candidate without building it.
           gates="${IN_GATES:-}"
-          [ -n "$gates" ] || gates="none"
+          [ -n "$gates" ] || gates="build"
 
           # "all" is the only alias; everything else is taken literally.
           case "$gates" in

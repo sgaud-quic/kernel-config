@@ -220,14 +220,20 @@ def main(argv: Optional[List[str]] = None) -> int:
              out_name in (cfg_job.get("outputs") or {}),
              str(cfg_job.get("outputs")))
     cfg_run = "".join(str(s.get("run", "")) for s in cfg_job.get("steps") or [])
-    t.ok("config job defaults gates to none",
-         'gates="none"' in cfg_run, cfg_run[:200])
+    t.ok("config job defaults gates to the build gate",
+         'gates="build"' in cfg_run, cfg_run[:200])
     dispatch_gates_default = (
         (triggers(pr_ci).get("workflow_dispatch", {}) or {})
         .get("inputs", {}).get("gates", {}).get("default")
     )
-    t.ok("dispatch input for gates defaults to none",
-         dispatch_gates_default == "none", str(dispatch_gates_default))
+    t.ok("dispatch input for gates defaults to build",
+         dispatch_gates_default == "build", str(dispatch_gates_default))
+    # The build gate must be reachable on a pull_request run, where there are
+    # no inputs at all. Defaulting to none left it unreachable except by manual
+    # dispatch, so config PRs were never actually built.
+    t.ok("PR runs request the build gate without any input",
+         'gates="build"' in cfg_run and 'gates="none"' not in cfg_run,
+         "a pull_request run supplies no inputs, so the default decides")
 
     t.ok("header documents how to trigger from the Actions UI",
          "default branch" in raw and "pull_request event runs this workflow" in raw)
@@ -696,7 +702,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         for in_gates, want_build, want_disp in [
             ("none", "false", ""),
-            ("", "false", ""),                       # pull_request default
+            # A pull_request run supplies no inputs, so this is the PR path:
+            # the build gate must be requested, nothing dispatched.
+            ("", "true", ""),
             ("build", "true", ""),
             ("all", "true", "pre-merge,yocto,ubuntu"),
             ("pre-merge", "false", "pre-merge"),
