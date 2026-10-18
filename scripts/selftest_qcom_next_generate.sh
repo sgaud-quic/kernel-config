@@ -77,6 +77,12 @@ if [ -z "${AUTOMERGE_DIR:-}" ] || [ ! -f "$AUTOMERGE_DIR/ci-merge" ]; then
     say "SKIP: ci-merge not found. Set AUTOMERGE_DIR to an automerge checkout."
     exit 0
 fi
+# Auto-detection above absolutises the path, but an explicitly supplied one may
+# be relative. The generator runs from throwaway work directories, so a relative
+# path stops resolving there and ci-merge silently fails to run, surfacing much
+# later as "ci-merge did not create the integration branch". The check above
+# cannot catch it because the working directory is still correct at this point.
+AUTOMERGE_DIR="$(cd "$AUTOMERGE_DIR" && pwd)"
 say "  ci-merge : $AUTOMERGE_DIR/ci-merge"
 
 BASH_MAJOR="$(bash --version | sed -n '1s/.*version \([0-9]*\).*/\1/p')"

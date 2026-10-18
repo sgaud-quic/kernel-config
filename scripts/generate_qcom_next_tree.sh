@@ -550,6 +550,22 @@ info "digest: $DIGEST"
 {
     echo "### qcom-next candidate tree"
     echo ""
+    # Without per-topic merge lines these counters are all structurally zero,
+    # and "Topics merged | 0" next to "Pins verified | 50 / 50" reads as though
+    # nothing was merged. Report them as unavailable instead of as zero.
+    if [ "$CI_MERGE_HAS_SUMMARY" -eq 1 ]; then
+        merged_cell="$MERGED_COUNT"
+        nothing_cell="$NOTHING_COUNT"
+        conflict_cell="$CONFLICT_TOTAL"
+    else
+        merged_cell="n/a (this ci-merge emits no per-topic summary)"
+        nothing_cell="n/a"
+        if [ "$CONFLICT_TOTAL" -gt 0 ]; then
+            conflict_cell="$CONFLICT_TOTAL"
+        else
+            conflict_cell="n/a (unresolved conflicts would fail the merge)"
+        fi
+    fi
     echo "| Field | Value |"
     echo "|---|---|"
     echo "| Integration branch | \`$INTEG_BRANCH\` |"
@@ -557,12 +573,18 @@ info "digest: $DIGEST"
     echo "| Base | \`$BASE_BRANCH\` @ \`${BASE_SHA:0:12}\` (tag \`${BASE_TAG:-none}\`) |"
     echo "| Rerere cache | \`${RR_REPO:-none}\` @ \`${RR_REF:-none}\` |"
     echo "| Topics configured | $TOPIC_COUNT |"
-    echo "| Topics merged | $MERGED_COUNT |"
-    echo "| Already up to date | $NOTHING_COUNT |"
-    echo "| Conflicts | $CONFLICT_TOTAL |"
+    echo "| Topics merged | $merged_cell |"
+    echo "| Already up to date | $nothing_cell |"
+    echo "| Conflicts | $conflict_cell |"
     echo "| Pins verified | ${VERIFIED:-0} / $TOPIC_COUNT |"
     echo "| Tested-set digest | \`$DIGEST\` |"
     echo ""
+    if [ "$CI_MERGE_HAS_SUMMARY" -eq 0 ]; then
+        echo "Pin verification is authoritative here: every configured sha was"
+        echo "confirmed to be an ancestor of the generated head, which is what"
+        echo "makes the tree correct regardless of the merge counters."
+        echo ""
+    fi
     if [ "$CONFLICT_TOTAL" -gt 0 ]; then
         echo "#### Unresolved conflicts"
         echo ""
