@@ -369,7 +369,6 @@ jobs:
           GATES_RESULT: ${{ needs.gates.result }}
           CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
-          CANDIDATE_REPO_NAME: ${{ env.CANDIDATE_REPO }}
           DIGEST: ${{ needs.candidate.outputs.digest }}
         with:
           script: |
@@ -377,14 +376,16 @@ jobs:
             const marker = '<!-- qcom-next-pr-ci -->';
             const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
 
-            // Everything arrives through env, so no workflow value is ever
-            // parsed as part of this script.
+            // Values arrive through env rather than being interpolated into
+            // this script body, so no workflow value can be parsed as code.
+            // CANDIDATE_REPO comes from the workflow-level env, which is
+            // already present in this step's process environment.
             const classification  = process.env.CLASSIFICATION || 'n/a';
             const candidateResult = process.env.CANDIDATE_RESULT || 'unknown';
             const gatesResult     = process.env.GATES_RESULT || 'unknown';
             const candidateRef    = process.env.CANDIDATE_REF || '';
             const candidateSha    = process.env.CANDIDATE_SHA || '';
-            const candidateRepo   = process.env.CANDIDATE_REPO_NAME || '';
+            const candidateRepo   = process.env.CANDIDATE_REPO || '';
             const digest          = process.env.DIGEST || '';
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
                            `/actions/runs/${process.env.GITHUB_RUN_ID}`;

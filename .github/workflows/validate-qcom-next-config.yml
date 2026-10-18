@@ -255,8 +255,11 @@ jobs:
             const marker = '<!-- qcom-next-config-validation -->';
             const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
 
-            // Read through env rather than interpolating ${{ }} into the
-            // script body, so no workflow value can be parsed as code.
+            // Values arrive through env rather than being interpolated into
+            // this script body, so no workflow value can be parsed as code.
+            // The expression delimiters cannot appear literally here: GitHub
+            // evaluates them anywhere in the file, and an empty one is a
+            // syntax error that makes the whole workflow unloadable.
             const validation = process.env.VALIDATION || 'unknown';
             const classification = process.env.CLASSIFICATION || 'n/a';
             const publishAllowed = process.env.PUBLISH_ALLOWED || 'n/a';

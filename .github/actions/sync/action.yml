@@ -57,8 +57,10 @@ runs:
     - name: Classify sync mode
       id: mode
       shell: bash
-      # Inputs arrive through env rather than ${{ }} interpolation into the
+      # Inputs arrive through env rather than being interpolated into the
       # script, so a value containing shell metacharacters cannot be executed.
+      # Note: the expression delimiters cannot be written literally in this
+      # comment, because GitHub evaluates them anywhere in the file.
       env:
         IN_REPO: ${{ inputs.repo }}
         IN_PR: ${{ inputs.pr_number }}

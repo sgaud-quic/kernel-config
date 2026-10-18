@@ -475,18 +475,59 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok(f"{label}: explains the read-only token",
              "read-only" in raw_text, label)
 
+    # An expression is evaluated anywhere in a workflow file, including inside
+    # a script body or a comment. An empty one is a syntax error that makes the
+    # whole file unloadable, which GitHub reports only as "workflow file issue"
+    # with no line number. This cost a full CI cycle, so check it directly.
+    print("\n[expression syntax]")
+    delim = "$" + "{{"
+    for label, path in (("pr-ci", PR_CI), ("validate", VALIDATE),
+                        ("prune", PRUNE), ("sync action", SYNC)):
+        body = open(path, encoding="utf-8").read()
+        empties = [i + 1 for i, l in enumerate(body.splitlines())
+                   if re.search(r"\$\{\{\s*\}\}", l)]
+        t.ok(f"{label}: no empty expression", not empties, f"lines {empties}")
+
+        # Every expression must reference a real context, otherwise it is prose
+        # that will be evaluated as code.
+        bad_ctx = []
+        for i, l in enumerate(body.splitlines(), 1):
+            for m in re.finditer(r"\$\{\{(.*?)\}\}", l):
+                inner = m.group(1).strip()
+                if not inner:
+                    continue
+                if not re.match(r"^(steps|needs|inputs|github|env|secrets|vars|"
+                                r"matrix|job|jobs|runner|strategy|always|success|"
+                                r"failure|cancelled|hashFiles|format|fromJSON|"
+                                r"toJSON|contains|startsWith|endsWith|join)\b",
+                                inner):
+                    bad_ctx.append((i, inner[:48]))
+        t.ok(f"{label}: every expression references a context",
+             not bad_ctx, str(bad_ctx[:3]))
+
     # Values must reach github-script through env, never by interpolation into
-    # the script body, or a workflow value could be parsed as code. Match real
-    # expressions rather than the literal braces, which also appear in prose.
-    expr = re.compile(r"\$\{\{\s*(steps|needs|inputs|github|env|secrets|vars|matrix)\.")
+    # the script body, or a workflow value could be parsed as code. Strict:
+    # the body must contain no expression delimiter at all, because even a
+    # comment mentioning one is evaluated.
     for label, wf_obj in (("pr-ci", pr_ci), ("validate", validate_wf)):
         for job_name, job in (wf_obj.get("jobs") or {}).items():
             for step in job.get("steps") or []:
                 if str(step.get("uses", "")).startswith("actions/github-script"):
                     script = str((step.get("with") or {}).get("script", ""))
-                    bad = [l.strip() for l in script.splitlines() if expr.search(l)]
-                    t.ok(f"{label}.{job_name}: github-script body interpolates no workflow value",
+                    bad = [l.strip() for l in script.splitlines() if delim in l]
+                    t.ok(f"{label}.{job_name}: github-script body has no expression delimiter",
                          not bad, bad[:3])
+
+    # A step's own env block must not reference the env context: the ordering
+    # within one mapping is undefined and GitHub rejects it.
+    for label, wf_obj in (("pr-ci", pr_ci), ("validate", validate_wf),
+                          ("prune", prune)):
+        for job_name, job in (wf_obj.get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                for k, v in (step.get("env") or {}).items():
+                    t.ok(f"{label}.{job_name}: step env {k} does not read the env context",
+                         not re.search(r"\$\{\{\s*env\.", str(v)), f"{k}={v}")
+
 
     # pull-requests: write must be scoped to the job that needs it.
     for label, wf_obj in (("pr-ci", pr_ci), ("validate", validate_wf)):
@@ -521,6 +562,24 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         p = run(["bash", "-n", path])
         t.ok(f"{script} parses", p.returncode == 0, p.stdout + p.stderr)
+
+    # ------------------------------------------------------------ actionlint
+    # Optional, because it is not a dependency of this repo. When present it
+    # validates expressions the way GitHub does, which catches the whole class
+    # of "workflow file issue" failures that GitHub reports without a line
+    # number.
+    print("\n[actionlint]")
+    import shutil
+    al = shutil.which("actionlint") or "/tmp/opencode/al/actionlint"
+    if not os.path.exists(al):
+        print("  SKIP  actionlint not installed")
+    else:
+        # The self-hosted runner labels are legitimate and unknown to actionlint.
+        p = run([al, "-shellcheck=", "-pyflakes=",
+                 "-ignore", r'label ".+" is unknown',
+                 PR_CI, VALIDATE, PRUNE])
+        out = (p.stdout + p.stderr).strip()
+        t.ok("actionlint reports no problems", p.returncode == 0 and not out, out)
 
     # ------------------------------------------------------------- epilogue
     total = t.passed + len(t.failed)
