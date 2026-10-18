@@ -20,6 +20,18 @@
 # Validated by scripts/validate_qcom_next_config.py against
 # schemas/qcom-next.schema.json.
 #
+# How a change here reaches qcom-next:
+#   1. qcom-next-pr-ci.yml validates this file, generates the candidate tree
+#      from the pins below, pushes it to the candidate repository and builds it.
+#   2. A green run records that candidate as publishable for this file's digest,
+#      as refs/qcom-next-tested/<digest> in the candidate repository.
+#   3. The integrator reviews the result and merges the PR.
+#   4. publish-qcom-next.yml then looks the digest up and force-pushes that
+#      exact tested commit to qcom-next. It never regenerates the tree, so the
+#      published commit is the commit that passed the gates.
+# Changing a comment in this file does not change the digest, because the digest
+# covers the projected inputs rather than the file bytes.
+#
 # Bootstrapped from qcom-next.conf on 2026-10-18 by
 # scripts/bootstrap_qcom_next_yaml.py.
 #
