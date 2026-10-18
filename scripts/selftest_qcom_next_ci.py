@@ -112,6 +112,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     pr_ci = wfs[PR_CI]
     prune = wfs[PRUNE]
     sync = wfs[SYNC]
+    validate_wf = wfs[VALIDATE]
     status_action = wfs[STATUS_ACTION]
 
     # -------------------------------------------------------------- pr-ci job graph
@@ -203,6 +204,44 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     t.ok("header documents how to trigger from the Actions UI",
          "default branch" in raw and "pull_request event runs this workflow" in raw)
+
+    # ------------------------------------------- migration flag resolution
+    print("\n[allow_untagged resolution]")
+    # Both workflows fire on pull_request, where no inputs exist. Input
+    # defaults do not apply there, so the expression must coalesce or the
+    # untagged backlog fails every config PR.
+    vraw = open(VALIDATE, encoding="utf-8").read()
+    t.ok("validate coalesces a null allow_untagged",
+         "inputs.allow_untagged == null" in vraw, vraw[:0])
+    t.ok("validate's shell fallback is on, not off",
+         'ALLOW_UNTAGGED:-true' in vraw,
+         [l for l in vraw.splitlines() if "ALLOW_UNTAGGED:-" in l])
+    t.ok("pr-ci coalesces a null allow_untagged",
+         "inputs.allow_untagged == null" in raw)
+
+    vtrig = triggers(validate_wf)
+    for trig_name in ("workflow_dispatch", "workflow_call"):
+        default = ((vtrig.get(trig_name, {}) or {})
+                   .get("inputs", {}).get("allow_untagged", {}).get("default"))
+        t.ok(f"validate {trig_name} allow_untagged default is true",
+             default is True, str(default))
+
+    # The atomic override must stay off by default: it exists to let an
+    # integrator bypass a dependency check, not to be on implicitly.
+    t.ok("atomic override defaults off on pull_request",
+         "ALLOW_ATOMIC:-false" in vraw)
+    for trig_name in ("workflow_dispatch", "workflow_call"):
+        default = ((vtrig.get(trig_name, {}) or {})
+                   .get("inputs", {}).get("allow_atomic_override", {}).get("default"))
+        t.ok(f"validate {trig_name} allow_atomic_override default is false",
+             default is False, str(default))
+
+    # Allowing an untagged sha must not weaken the pinned-sha rule.
+    t.ok("validator documents that --allow-untagged covers tags only",
+         "concerns tags only" in open(
+             os.path.join(HERE, "validate_qcom_next_config.py"),
+             encoding="utf-8").read()
+         or "Does NOT excuse" in vraw or "unpinned sha is rejected" in vraw)
 
     t.ok("final-status treats skipped gates as acceptable",
          "success|skipped" in raw)

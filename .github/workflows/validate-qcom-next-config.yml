@@ -33,9 +33,9 @@ on:
         type: string
         required: false
       allow_untagged:
-        description: Downgrade missing-tag errors to warnings (migration only)
+        description: "Downgrade missing-tag errors to warnings (migration default: on)"
         type: boolean
-        default: false
+        default: true
       allow_atomic_override:
         description: Permit a multi-topic promotion that depends_on does not justify
         type: boolean
@@ -47,7 +47,7 @@ on:
         required: false
       allow_untagged:
         type: boolean
-        default: false
+        default: true
       allow_atomic_override:
         type: boolean
         default: false
@@ -137,7 +137,13 @@ jobs:
       - name: Validate config (V1-V5, V8)
         id: validate
         env:
-          ALLOW_UNTAGGED: ${{ inputs.allow_untagged }}
+          # Input defaults do not apply to the pull_request trigger, where
+          # there are no inputs at all, so coalesce explicitly. During the
+          # migration the default is on: 46 of 50 topics have no conventional
+          # tag yet, and without this every config PR would fail on the tag
+          # backlog rather than on anything it changed. This only affects tags;
+          # an unpinned sha is rejected regardless (V5).
+          ALLOW_UNTAGGED: ${{ inputs.allow_untagged == null && 'true' || inputs.allow_untagged }}
         run: |
           set -euo pipefail
           args=(--config qcom-next.yaml
@@ -145,7 +151,7 @@ jobs:
                 --maintainers topic_maintainers.json
                 --format github
                 --markdown-out validate-summary.md)
-          if [ "${ALLOW_UNTAGGED:-false}" = "true" ]; then
+          if [ "${ALLOW_UNTAGGED:-true}" = "true" ]; then
             args+=(--allow-untagged)
             echo "::notice title=qcom-next config::running with --allow-untagged (migration mode)"
           fi
