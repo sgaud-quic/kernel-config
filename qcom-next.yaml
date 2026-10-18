@@ -7,6 +7,8 @@
 # Rules:
 #   * qcom-next is never hand-edited. It is published only by the
 #     publication workflow, driven by this file.
+#   * Every entry carries a concrete sha. There is no 'sha: null', and
+#     generation never falls back to a branch tip (FR-INT-03).
 #   * Every sha recorded here is a STABLE sha: it has passed the CI gates.
 #   * Every sha must be reachable from a tag so it survives a topic rebase.
 #   * Topic owners live in topic_maintainers.json, keyed by the topic name

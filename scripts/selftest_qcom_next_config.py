@@ -252,28 +252,36 @@ class Runner:
         self.check("--strict turns warnings into errors",
                    rc == 1 and "(--strict)" in out, out)
 
-        # V5 structural half: an unpinned topic must be reported even offline,
-        # because tree generation will refuse the config. Previously this was
-        # only noticed online, so the failure surfaced much later.
+        # V5: a topic without a concrete sha is invalid (FR-INT-03). Rejected by
+        # the schema and reported by V5 in the validator's own vocabulary.
         cfg = copy.deepcopy(BASELINE_CONFIG)
         cfg["topics"][1]["sha"] = None
         path = self.write_cfg("v5a.yaml", cfg)
         rc, out = self.run_validator(path)
+        self.check("unpinned topic is an error, not a warning", rc == 1, out)
         self.check("unpinned topic is reported offline",
                    "sha is null" in out and "tech/bsp/interconnect" in out, out)
-        self.check("unpinned topic is a warning, not a hard error, by default",
-                   rc == 0, out)
-        rc, out = self.run_validator(path, "--strict")
-        self.check("--strict turns an unpinned topic into an error", rc == 1, out)
-        self.check("message says generation will refuse it",
-                   "generation will refuse" in out or "refuse the config" in out, out)
+        self.check("unpinned topic cites FR-INT-03", "FR-INT-03" in out, out)
+        self.check("message rules out a branch-tip fallback",
+                   "not fall back to the branch tip" in out, out)
+        self.check("schema also rejects a null topic sha",
+                   "is not of type 'string'" in out, out)
 
-        # A null base.sha is always an error: there is no tree without a base.
+        # A null base.sha is equally invalid: there is no tree without a base.
         cfg = copy.deepcopy(BASELINE_CONFIG)
         cfg["base"]["sha"] = None
         rc, out = self.run_validator(self.write_cfg("v5b.yaml", cfg))
         self.check("null base.sha is an error even offline",
                    rc == 1 and "base.sha is null" in out, out)
+
+        # The rule must hold in online mode too, and must not be downgraded by
+        # the migration flag, which only concerns tags.
+        cfg = copy.deepcopy(BASELINE_CONFIG)
+        cfg["topics"][0]["sha"] = None
+        rc, out = self.run_validator(self.write_cfg("v5c.yaml", cfg),
+                                     "--allow-untagged")
+        self.check("--allow-untagged does not excuse an unpinned topic",
+                   rc == 1, out)
 
         # markdown output renders
         rc, out = self.run_validator(self.write_cfg("md.yaml", BASELINE_CONFIG),

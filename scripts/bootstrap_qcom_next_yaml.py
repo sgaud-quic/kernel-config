@@ -12,14 +12,22 @@ source of truth.
 
 Where the pinned SHAs come from
 -------------------------------
-By default each branch's current tip is captured, which pins "whatever is live
-right now". That is rarely what you want for a first migration.
+Every entry this script emits carries a concrete SHA. FR-INT-03 forbids a null
+SHA in the config, and tree generation never falls back to a branch tip, so
+resolving a tip to a SHA is this script's job rather than something deferred to
+merge time.
+
+By default each branch's current tip is resolved and recorded, which pins
+"whatever is live right now". That is rarely what you want for a first
+migration.
 
 With ``--topic-sha1`` the SHAs are instead read from the ``topic_SHA1`` table
 that automerge publishes alongside a generated qcom-next, so the config
 describes the integration state that was actually built and tested. Topics
 absent from that table merged nothing on that run ("Already up to date"), and
-fall back to their branch tip; they are listed in the generated header.
+have their tip resolved and recorded instead; they are listed in the generated
+header. ``--only-topic-sha1`` drops them instead, which reproduces the same tree
+without recording a SHA the integration never used.
 
 The baseline is configurable with ``--baseline-repo``, ``--baseline-ref`` and
 ``--baseline-sha``, because the repository that should supply the baseline is
@@ -288,6 +296,8 @@ def render_yaml(base: dict, topics: List[dict], promotion_state: str,
     a("# Rules:")
     a("#   * qcom-next is never hand-edited. It is published only by the")
     a("#     publication workflow, driven by this file.")
+    a("#   * Every entry carries a concrete sha. There is no 'sha: null', and")
+    a("#     generation never falls back to a branch tip (FR-INT-03).")
     a("#   * Every sha recorded here is a STABLE sha: it has passed the CI gates.")
     a("#   * Every sha must be reachable from a tag so it survives a topic rebase.")
     a("#   * Topic owners live in topic_maintainers.json, keyed by the topic name")

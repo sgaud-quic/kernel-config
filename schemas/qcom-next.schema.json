@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://github.com/qualcomm-linux/kernel-config/schemas/qcom-next.schema.json",
   "title": "qcom-next SHA-pinned topic configuration",
-  "description": "Single source of truth describing the content of the qcom-next integration tree. qcom-next is a deterministic function of base.sha, the ordered topics list, and the rerere cache revision. qcom-next must never be hand-edited; it is published only by the publication workflow driven by this file.",
+  "description": "Single source of truth describing the content of the qcom-next integration tree. qcom-next is a deterministic function of base.sha, the ordered topics list, and the rerere cache revision. Every base and topic entry must carry a concrete SHA (FR-INT-03): generation never consumes a branch tip, because that would make the result depend on when it ran rather than on this file. qcom-next must never be hand-edited; it is published only by the publication workflow driven by this file.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "base", "promotion_state", "rerere_cache", "topics"],
@@ -32,11 +32,8 @@
           "description": "Upstream tag/RC label the baseline corresponds to, e.g. v7.3-rc1. Null only during bootstrap."
         },
         "sha": {
-          "anyOf": [
-            { "$ref": "#/definitions/gitSha" },
-            { "type": "null" }
-          ],
-          "description": "Pinned baseline commit. Null only during bootstrap; must be a full 40-hex SHA for any promotion or RC uprev PR."
+          "$ref": "#/definitions/gitSha",
+          "description": "Pinned baseline commit. Mandatory: tree generation must not depend on where a branch happens to point when it runs (NFR-01)."
         }
       }
     },
@@ -111,11 +108,8 @@
           "description": "Topic branch name. Must still exist (V4); renaming or deleting requires removing or updating this entry (FR-INT-02)."
         },
         "sha": {
-          "anyOf": [
-            { "$ref": "#/definitions/gitSha" },
-            { "type": "null" }
-          ],
-          "description": "Pinned stable topic commit, i.e. a SHA that already passed the CI gates. Null is allowed only for a newly added topic, in which case the branch tip is resolved, recorded and tagged (V5, FR-INT-03)."
+          "$ref": "#/definitions/gitSha",
+          "description": "Pinned stable topic commit: a SHA that already passed the CI gates. Mandatory (FR-INT-03). A new topic is added only together with a concrete SHA; generation never falls back to the branch tip, because that would make the tree depend on when it ran rather than on this file (NFR-01). Resolving a tip to a concrete SHA is the job of the bootstrap and promotion steps."
         },
         "tag": {
           "type": ["string", "null"],

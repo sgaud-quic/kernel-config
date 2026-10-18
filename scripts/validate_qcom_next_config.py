@@ -9,8 +9,8 @@ structural and data-integrity rules from the Kernel Topic Promotion Flow design:
   V2 Duplicates  no duplicate topic names, no duplicate repo/branch pairs
   V3 Tagged SHA  every configured sha exists and its tag resolves to that sha
   V4 Branch      every configured topic branch still exists on its remote
-  V5 New topic   a topic with sha: null resolves to the branch tip (reported so
-                 it can be recorded and tagged)
+  V5 Pinned SHA  the base and every topic carry a concrete sha (FR-INT-03);
+                 generation never falls back to a branch tip
   V8 Dependency  depends_on references existing topics, has no cycles, and the
                  topics array order respects the dependency graph
 
@@ -337,22 +337,22 @@ def check_dependencies(topics: Sequence[dict], f: Findings) -> None:
 
 
 # ---------------------------------------------------------------------------
-# V5 (structural half) — unpinned topics
+# V5 — every entry must be pinned
 # ---------------------------------------------------------------------------
 def check_pins(cfg: dict, topics: Sequence[dict], f: Findings) -> None:
-    """Report topics and a baseline that carry no concrete SHA.
+    """Reject any base or topic entry that carries no concrete SHA.
+
+    FR-INT-03: a topic is added to the config only together with a concrete SHA.
+    Generation deliberately does not fall back to the branch tip, because
+    consuming a tip at merge time would make the generated tree depend on when
+    it ran rather than on this file, contradicting NFR-01. Resolving a tip to a
+    concrete SHA belongs to the bootstrap and promotion steps, which record it
+    and then tag it.
 
     Whether a SHA *exists* on its remote needs the network, but whether one is
-    present at all does not. Checking it here means an unpinned topic is
-    reported during validation rather than surfacing much later as a tree
-    generation failure.
-
-    The schema permits a null SHA so a maintainer can add a topic without
-    resolving it by hand (FR-INT-03). Resolution belongs to the bootstrap and
-    promotion steps, which record the tip and then pin and tag it. Tree
-    generation requires every pin to be concrete, because consuming a branch tip
-    at merge time would make the result depend on when it ran rather than on the
-    config (NFR-01).
+    present at all does not, so this runs even with --offline. The schema also
+    rejects a null SHA; this check reports it in the validator's own vocabulary
+    and still fires when the schema is bypassed.
     """
     f.ran("V5")
 
@@ -360,34 +360,28 @@ def check_pins(cfg: dict, topics: Sequence[dict], f: Findings) -> None:
     if base.get("sha") is None:
         f.error(
             "V5",
-            "base.sha is null. Tree generation needs a concrete baseline commit; "
-            "pin it before this config can produce a tree.",
+            "base.sha is null. The baseline must be pinned to a concrete commit "
+            "(FR-INT-03); there is no tree to generate without one.",
         )
 
-    unpinned = [t.get("name", "<unnamed>") for t in topics if t.get("sha") is None]
-    for name in unpinned:
-        f.warn(
-            "V5",
-            f"{name}: sha is null, so this topic is not pinned. Tree generation "
-            "will refuse the config until it is resolved to a concrete commit "
-            "and tagged.",
-        )
-    if unpinned:
-        f.info(
-            "V5",
-            f"{len(unpinned)} of {len(topics)} topic(s) are unpinned; "
-            "scripts/generate_qcom_next_tree.sh exits non-zero in that state",
-        )
+    for t in topics:
+        if t.get("sha") is None:
+            f.error(
+                "V5",
+                f"{t.get('name', '<unnamed>')}: sha is null. A topic is added only "
+                "together with a concrete, tagged SHA (FR-INT-03). Resolve it to "
+                "the commit you intend to consume, tag that commit, and record "
+                "both here; generation will not fall back to the branch tip.",
+            )
 
 
 # ---------------------------------------------------------------------------
-# V3 / V4 / V5 — remote reality checks
+# V3 / V4 — remote reality checks
 # ---------------------------------------------------------------------------
 def check_remotes(cfg: dict, topics: Sequence[dict], index: RemoteIndex,
                   allow_untagged: bool, f: Findings) -> None:
     f.ran("V3")
     f.ran("V4")
-    f.ran("V5")
 
     # ---- base block ----
     base = cfg.get("base") or {}
@@ -459,16 +453,9 @@ def check_remotes(cfg: dict, topics: Sequence[dict], index: RemoteIndex,
 
         tip = heads.get(branch) if isinstance(branch, str) else None
 
-        # V5 — new topic with no pinned sha. check_pins already warned that it
-        # is unpinned; here we can additionally report what it would resolve to,
-        # which is what the maintainer needs in order to pin it.
+        # An unpinned topic is already a hard error from check_pins, and the
+        # schema rejects it too, so there is nothing further to resolve here.
         if sha is None:
-            if tip:
-                f.info(
-                    "V5",
-                    f"{name}: branch tip is {tip}. Record this sha and tag it as "
-                    f"{branch}-<kernel-version>-<YYYYMMDD>",
-                )
             continue
 
         if not isinstance(sha, str) or not SHA_RE.match(sha):
@@ -531,7 +518,7 @@ RULE_TITLES = {
     "V2": "duplicates",
     "V3": "tagged SHA",
     "V4": "branch exists",
-    "V5": "new topic",
+    "V5": "pinned sha",
     "V8": "dependencies",
     "OWNERS": "maintainer coverage",
 }

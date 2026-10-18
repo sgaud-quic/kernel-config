@@ -196,7 +196,7 @@ Validation rules
     V2  no duplicate topic names, no duplicate repo/branch pairs
     V3  every configured SHA exists and its tag resolves to that SHA
     V4  every configured topic branch still exists on its remote
-    V5  a topic with sha: null resolves to the branch tip, to be recorded+tagged
+    V5  the base and every topic carry a concrete SHA
     V6  a promotion PR changes only topics; an RC uprev changes only base
     V7  no promotion publishes while promotion_state is frozen
     V8  depends_on references real topics, has no cycles, and merge order
@@ -206,6 +206,23 @@ V1-V5 and V8 are checked by `scripts/validate_qcom_next_config.py`, which
 examines one config in isolation. V6 and V7 are diff-based and are checked by
 `scripts/classify_qcom_next_change.py`, which compares the PR config against the
 target branch.
+
+
+Every entry must be pinned
+--------------------------
+
+A topic is added to `qcom-next.yaml` only together with a concrete SHA, and the
+same applies to the baseline. There is no `sha: null`, and tree generation never
+falls back to a branch tip: consuming a tip at merge time would make the
+generated tree depend on when the job ran rather than on this file, which is the
+one property the whole flow exists to provide.
+
+Resolving a branch tip to a concrete SHA is a separate, deliberate act. It
+belongs to the bootstrap helper during migration, and to the maintainer when
+promoting: tag the commit you intend to consume, then record that SHA and tag.
+
+The schema rejects a null SHA, and V5 reports it with the topic named.
+`--allow-untagged` does not excuse it; that flag concerns tags only.
 
 
 Inter-topic dependencies
