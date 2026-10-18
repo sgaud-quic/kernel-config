@@ -604,7 +604,13 @@ jobs:
   record:
     name: Record the tested candidate
     needs: [config, validate, candidate, build-gate, gates]
+    # always() is load-bearing, not decoration. The PR-centric gates are
+    # legitimately skipped for a staging candidate, and a job whose needs
+    # include a skipped job is itself skipped before its if is ever evaluated.
+    # Without always() this job never ran, the tested tree was never recorded,
+    # and the run still reported green.
     if: >-
+      always() &&
       needs.candidate.result == 'success' &&
       needs.build-gate.result == 'success' &&
       (needs.gates.result == 'success' || needs.gates.result == 'skipped')
@@ -745,4 +751,15 @@ jobs:
                 ;;
             esac
           done
+
+          # Recording is what makes the tested tree publishable, so a skip here
+          # is not benign: it means the merged config will have no candidate to
+          # publish. It was silently skipped once already, because a needed job
+          # was skipped and GitHub skips the dependent job before evaluating
+          # its if. Treat it as a failure whenever there was something to record.
+          if [ "$candidate" = "success" ] && [ "$build_gate" = "success" ] \
+             && [ "$record" != "success" ]; then
+            echo "::error title=qcom-next PR CI::the tested candidate was not recorded (${record:-no result}), so publication cannot find it after the merge"
+            exit 1
+          fi
           echo "all required stages passed"

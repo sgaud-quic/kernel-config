@@ -1058,11 +1058,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok("record passes the proven status name",
              "--statuses" in pr_raw_all and "qcom-next-build" in pr_raw_all)
 
+        # GitHub skips a job whose needs include a skipped job, before its if
+        # is evaluated at all. The PR-centric gates are skipped for every
+        # staging candidate, so any job that needs them and must still run has
+        # to say always() or !cancelled(). record did not, so it never ran and
+        # the run reported green with nothing recorded. Assert the semantic for
+        # every such job rather than just this one.
+        for jname, job in jobs_all.items():
+            jneeds = job.get("needs") or []
+            if isinstance(jneeds, str):
+                jneeds = [jneeds]
+            if "gates" not in jneeds:
+                continue
+            jif = str(job.get("if") or "")
+            guarded = "always()" in jif or "!cancelled()" in jif
+            t.ok(f"job '{jname}' needs the skippable gates job and survives its skip",
+                 guarded,
+                 f"if: {jif or '<none>'} -- add always() or !cancelled(), "
+                 "otherwise this job is skipped whenever gates is skipped")
+
         fs_needs = (jobs_all.get("final-status") or {}).get("needs") or []
         t.ok("the verdict waits for the record job",
              "record" in fs_needs, str(fs_needs))
         t.ok("the verdict judges the record job",
              "record:$record" in pr_raw_all)
+        # Treating a skipped recording as acceptable is what let the run go
+        # green with nothing publishable.
+        t.ok("the verdict rejects a skipped recording when there was something to record",
+             'record" != "success"' in pr_raw_all and
+             "publication cannot find it" in pr_raw_all)
 
     # ------------------------------------------------------------ actionlint
     # Optional, because it is not a dependency of this repo. When present it
