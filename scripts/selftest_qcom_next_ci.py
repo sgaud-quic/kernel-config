@@ -1118,6 +1118,39 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.ok("the log commit can be disabled",
          "--no-log-commit" in gen_raw)
 
+    # --------------------------------------------- forced candidate override
+    # scripts/** is a watched path, but the classifier only reads
+    # qcom-next.yaml, so a generator change is classified no-change and never
+    # builds a candidate -- the generator is not exercised by its own PRs.
+    print("\n[forced candidate]")
+    pr_inputs = (triggers(pr_ci).get("workflow_dispatch") or {}).get("inputs") or {}
+    t.ok("a manual run can force a candidate",
+         "force_candidate" in pr_inputs, str(list(pr_inputs)))
+    t.ok("forcing is off by default",
+         (pr_inputs.get("force_candidate") or {}).get("default") in (False, "false"),
+         str((pr_inputs.get("force_candidate") or {}).get("default")))
+    t.ok("the config job publishes force_candidate",
+         "force_candidate" in str((pr_ci.get("jobs") or {}).get("config", {}).get("outputs", {})))
+
+    cand_if = str((pr_ci.get("jobs") or {}).get("candidate", {}).get("if") or "")
+    t.ok("a forced run generates a candidate despite no-change",
+         "force_candidate == 'true'" in cand_if, cand_if)
+    t.ok("a rejected mixed change is never forceable",
+         "invalid-mixed-change" in cand_if and
+         cand_if.index("invalid-mixed-change") < cand_if.index("force_candidate"),
+         cand_if)
+
+    # The early exit for an unchanged config would otherwise report green
+    # without looking at the candidate the run was explicitly asked to build.
+    t.ok("the verdict judges a forced candidate instead of exiting early",
+         'if [ "$force" != "true" ]; then' in pr_raw_all and
+         "a candidate was forced; judging it" in pr_raw_all)
+    t.ok("the verdict reads force_candidate from the config job",
+         "FORCE_CANDIDATE: ${{ needs.config.outputs.force_candidate }}" in pr_raw_all)
+    fs_needs_all = (pr_ci.get("jobs") or {}).get("final-status", {}).get("needs") or []
+    t.ok("the verdict depends on the config job to read the override",
+         "config" in fs_needs_all, str(fs_needs_all))
+
     # ------------------------------------------------------------ actionlint
     # Optional, because it is not a dependency of this repo. When present it
     # validates expressions the way GitHub does, which catches the whole class

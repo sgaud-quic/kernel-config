@@ -81,6 +81,13 @@ on:
         type: boolean
         default: false
         required: false
+      force_candidate:
+        description: >-
+          Generate a candidate even when the config is unchanged (for generator
+          or script changes, and to regenerate an existing config)
+        type: boolean
+        default: false
+        required: false
 
 # Least privilege at the workflow level: only the reporting job needs to write
 # to the PR, so it requests that itself.
@@ -117,6 +124,7 @@ jobs:
       gate_build: ${{ steps.r.outputs.gate_build }}
       gates_dispatched: ${{ steps.r.outputs.gates_dispatched }}
       allow_untagged: ${{ steps.r.outputs.allow_untagged }}
+      force_candidate: ${{ steps.r.outputs.force_candidate }}
       pr_number: ${{ steps.r.outputs.pr_number }}
     steps:
       - name: Resolve
@@ -125,6 +133,7 @@ jobs:
           IN_CANDIDATE_REPO: ${{ inputs.candidate_repo }}
           IN_GATES: ${{ inputs.gates }}
           IN_ALLOW_UNTAGGED: ${{ inputs.allow_untagged }}
+          IN_FORCE_CANDIDATE: ${{ inputs.force_candidate }}
           IN_PR: ${{ inputs.pr }}
           EVENT_PR: ${{ github.event.pull_request.number }}
         run: |
@@ -166,6 +175,15 @@ jobs:
           allow_untagged="${IN_ALLOW_UNTAGGED:-}"
           [ -n "$allow_untagged" ] || allow_untagged="true"
 
+          # The classifier only looks at qcom-next.yaml, so a change to the
+          # generator is classified no-change and never builds a candidate --
+          # even though scripts/** is a watched path and a generator change
+          # does alter the produced tree. This is the explicit override for
+          # that case, and for regenerating a config that has not changed.
+          # Only available on a manual dispatch; it cannot be set by a PR.
+          force_candidate="${IN_FORCE_CANDIDATE:-}"
+          [ -n "$force_candidate" ] || force_candidate="false"
+
           pr_number="${EVENT_PR:-}"
           [ -n "$pr_number" ] || pr_number="${IN_PR:-0}"
           [ -n "$pr_number" ] || pr_number="0"
@@ -176,6 +194,7 @@ jobs:
             echo "gate_build=$gate_build"
             echo "gates_dispatched=$dispatched"
             echo "allow_untagged=$allow_untagged"
+            echo "force_candidate=$force_candidate"
             echo "pr_number=$pr_number"
           } >> "$GITHUB_OUTPUT"
 
@@ -187,6 +206,7 @@ jobs:
             echo "| Candidate repository | \`$candidate_repo\` |"
             echo "| Gates | \`$gates\` |"
             echo "| Allow untagged SHAs | \`$allow_untagged\` |"
+            echo "| Force candidate | \`$force_candidate\` |"
             echo "| PR number | \`$pr_number\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -213,11 +233,14 @@ jobs:
     name: Generate and push candidate
     needs: [config, validate]
     # metadata-only and no-change leave the generated tree identical, so there
-    # is nothing to build and nothing to test.
+    # is nothing to build and nothing to test -- unless the run explicitly asks
+    # for a candidate, which is how a generator change gets exercised.
+    # invalid-mixed-change is never forceable: the classifier rejected it.
     if: >-
-      needs.validate.outputs.classification != 'metadata-only' &&
-      needs.validate.outputs.classification != 'no-change' &&
-      needs.validate.outputs.classification != 'invalid-mixed-change'
+      needs.validate.outputs.classification != 'invalid-mixed-change' &&
+      (needs.config.outputs.force_candidate == 'true' ||
+       (needs.validate.outputs.classification != 'metadata-only' &&
+        needs.validate.outputs.classification != 'no-change'))
     runs-on:
       group: GHA-Kernel-SelfHosted-RG
       labels: [self-hosted, kernel-prd-u2404-x64-large-od-ephem]
@@ -699,7 +722,7 @@ jobs:
     # build gate was still running and ignored its outcome entirely. record is
     # listed for the same reason: if the tested tree was not recorded,
     # publication cannot find it after the merge, and that must not read green.
-    needs: [validate, candidate, build-gate, gates, record]
+    needs: [config, validate, candidate, build-gate, gates, record]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -711,6 +734,7 @@ jobs:
           BUILD_GATE_RESULT: ${{ needs.build-gate.result }}
           GATES_RESULT: ${{ needs.gates.result }}
           RECORD_RESULT: ${{ needs.record.result }}
+          FORCE_CANDIDATE: ${{ needs.config.outputs.force_candidate }}
         run: |
           set -euo pipefail
           classification="${CLASSIFICATION:-}"
@@ -719,6 +743,7 @@ jobs:
           build_gate="${BUILD_GATE_RESULT:-}"
           gates="${GATES_RESULT:-}"
           record="${RECORD_RESULT:-}"
+          force="${FORCE_CANDIDATE:-false}"
 
           echo "classification : $classification"
           echo "validate       : $validate"
@@ -726,6 +751,7 @@ jobs:
           echo "build gate     : $build_gate"
           echo "gates          : $gates"
           echo "record         : $record"
+          echo "forced         : $force"
 
           if [ "$validate" != "success" ]; then
             echo "::error title=qcom-next PR CI::configuration validation failed"
@@ -734,8 +760,14 @@ jobs:
 
           case "$classification" in
             metadata-only|no-change)
-              echo "generated tree is unchanged; gates intentionally skipped"
-              exit 0
+              # A forced run did build and record a candidate, so the verdict
+              # has to judge those stages instead of declaring the tree
+              # unchanged and exiting green without looking at them.
+              if [ "$force" != "true" ]; then
+                echo "generated tree is unchanged; gates intentionally skipped"
+                exit 0
+              fi
+              echo "config unchanged, but a candidate was forced; judging it"
               ;;
             invalid-mixed-change)
               echo "::error title=qcom-next PR CI::change rejected by the classifier"
