@@ -42,6 +42,7 @@ PR_CI = os.path.join(WF_DIR, "qcom-next-pr-ci.yml")
 PRUNE = os.path.join(WF_DIR, "prune-qcom-next-candidates.yml")
 VALIDATE = os.path.join(WF_DIR, "validate-qcom-next-config.yml")
 GATES_WF = os.path.join(WF_DIR, "qcom-next-gates.yml")
+PUBLISH = os.path.join(WF_DIR, "publish-qcom-next.yml")
 SYNC = os.path.join(ACT_DIR, "sync", "action.yml")
 STATUS_ACTION = os.path.join(ACT_DIR, "workflow_status", "action.yml")
 DISPATCH = os.path.join(HERE, "dispatch_gates.sh")
@@ -957,13 +958,111 @@ def main(argv: Optional[List[str]] = None) -> int:
     # --------------------------------------------------------- shell syntax
     print("\n[shell syntax]")
     for script in ["dispatch_gates.sh", "generate_qcom_next_tree.sh",
-                   "check_tested_tree_matches.sh", "selftest_qcom_next_generate.sh"]:
+                   "check_tested_tree_matches.sh", "selftest_qcom_next_generate.sh",
+                   "record_tested_candidate.sh", "publish_qcom_next.sh",
+                   "selftest_qcom_next_publish.sh"]:
         path = os.path.join(HERE, script)
         if not os.path.exists(path):
             t.ok(f"{script} exists", False)
             continue
         p = run(["bash", "-n", path])
         t.ok(f"{script} parses", p.returncode == 0, p.stdout + p.stderr)
+
+    # ---------------------------------------------------- publication wiring
+    # Phase 5. Publication is the one stage that writes a branch other repos
+    # consume, so the checks here are about it refusing to publish anything it
+    # has not proven, and about the PR CI recording what it tested.
+    print("\n[publication]")
+    if not os.path.exists(PUBLISH):
+        t.ok("publish-qcom-next.yml exists", False)
+    else:
+        pub = load_wf(PUBLISH)
+        pub_raw = open(PUBLISH, encoding="utf-8").read()
+        pub_trig = triggers(pub)
+
+        t.ok("publication runs after the merge, on push",
+             "push" in pub_trig, str(list(pub_trig)))
+        push_paths = (pub_trig.get("push") or {}).get("paths") or []
+        t.ok("publication triggers on the config file",
+             "qcom-next.yaml" in push_paths, str(push_paths))
+        t.ok("publication has a manual retry path",
+             "workflow_dispatch" in pub_trig)
+
+        # Two publications racing on one branch would be a lost update, and
+        # cancelling one mid-push is worse than queueing it.
+        conc = pub.get("concurrency") or {}
+        t.ok("publication serialises on a dedicated concurrency group",
+             conc.get("group") == "qcom-next-publication", str(conc))
+        t.ok("publication is never cancelled in flight",
+             conc.get("cancel-in-progress") is False, str(conc))
+
+        # The whole point of Phase 5 is to publish the commit that was tested.
+        t.ok("publication does not regenerate the tree",
+             "generate_qcom_next_tree.sh" not in pub_raw)
+        t.ok("publication calls the publish script",
+             "publish_qcom_next.sh" in pub_raw)
+        t.ok("publication defaults to the staging target",
+             pub_raw.count(CANDIDATE_REPO) >= 2, "candidate and publish repo")
+        t.ok("publication does not default to the production repo",
+             f"default: {PROD_REPO}" not in pub_raw)
+
+        pub_inputs = (pub_trig.get("workflow_dispatch") or {}).get("inputs") or {}
+        t.ok("publication exposes a dry run",
+             "dry_run" in pub_inputs, str(list(pub_inputs)))
+        t.ok("dry run is off by default, so the workflow really publishes",
+             (pub_inputs.get("dry_run") or {}).get("default") in (False, "false"),
+             str((pub_inputs.get("dry_run") or {}).get("default")))
+        t.ok("publication requires the build gate by default",
+             (pub_inputs.get("require_statuses") or {}).get("default") == "qcom-next-build",
+             str((pub_inputs.get("require_statuses") or {}).get("default")))
+
+        # A push event carries no inputs, so an empty value must not mean
+        # "require no checks" -- that would publish an unproven commit.
+        pub_jobs = pub.get("jobs") or {}
+        pub_steps = "".join(
+            str(s.get("run", ""))
+            for j in pub_jobs.values() for s in (j.get("steps") or []))
+        t.ok("a push run still requires the build gate",
+             'require_statuses="qcom-next-build"' in pub_steps,
+             "an empty required-status list must not be honoured")
+        t.ok("publication fails when no push token is present",
+             "no push token available" in pub_raw)
+        t.ok("a failed publication explains the republish state",
+             "re-run this workflow" in pub_raw)
+        t.ok("publication keeps a durable record",
+             "upload-artifact" in pub_raw and "publication.md" in pub_raw)
+
+        p = run(["bash", os.path.join(HERE, "publish_qcom_next.sh"), "--help"])
+        t.ok("publish script has usable help", p.returncode == 0,
+             (p.stdout + p.stderr)[:200])
+
+    # The record job is what makes publication possible at all: without it the
+    # publisher cannot map a merged config back to a tested commit.
+    pr_raw_all = open(PR_CI, encoding="utf-8").read()
+    jobs_all = pr_ci.get("jobs") or {}
+    t.ok("PR CI has a record job", "record" in jobs_all, str(list(jobs_all)))
+    if "record" in jobs_all:
+        rec = jobs_all["record"]
+        rec_needs = rec.get("needs") or []
+        rec_if = str(rec.get("if") or "")
+        t.ok("record waits for the build gate",
+             "build-gate" in rec_needs, str(rec_needs))
+        t.ok("record only runs when the build gate passed",
+             "build-gate.result == 'success'" in rec_if, rec_if)
+        t.ok("record only runs when candidate generation passed",
+             "candidate.result == 'success'" in rec_if, rec_if)
+        t.ok("record tolerates skipped PR-centric gates",
+             "gates.result == 'skipped'" in rec_if, rec_if)
+        t.ok("record calls the recorder script",
+             "record_tested_candidate.sh" in pr_raw_all)
+        t.ok("record passes the proven status name",
+             "--statuses" in pr_raw_all and "qcom-next-build" in pr_raw_all)
+
+        fs_needs = (jobs_all.get("final-status") or {}).get("needs") or []
+        t.ok("the verdict waits for the record job",
+             "record" in fs_needs, str(fs_needs))
+        t.ok("the verdict judges the record job",
+             "record:$record" in pr_raw_all)
 
     # ------------------------------------------------------------ actionlint
     # Optional, because it is not a dependency of this repo. When present it
@@ -979,7 +1078,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         # The self-hosted runner labels are legitimate and unknown to actionlint.
         p = run([al, "-shellcheck=", "-pyflakes=",
                  "-ignore", r'label ".+" is unknown',
-                 PR_CI, VALIDATE, PRUNE])
+                 PR_CI, VALIDATE, PRUNE] +
+                ([GATES_WF] if os.path.exists(GATES_WF) else []) +
+                ([PUBLISH] if os.path.exists(PUBLISH) else []))
         out = (p.stdout + p.stderr).strip()
         t.ok("actionlint reports no problems", p.returncode == 0 and not out, out)
 

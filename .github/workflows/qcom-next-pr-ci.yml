@@ -591,13 +591,100 @@ jobs:
             echo "| Candidate ref | \`${CANDIDATE_REF:-not pushed}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ------------------------------------------------------------- record
+  # Makes the tested tree publishable, and nothing more. Publication (Phase 5)
+  # runs after the PR is merged, in a run with no link back to this one, so it
+  # needs a durable answer to "which commit passed the gates for this exact
+  # config?". This records that as refs/qcom-next-tested/<digest> in the
+  # candidate repo.
+  #
+  # It is deliberately gated on the gates actually being green: recording an
+  # untested tree would make it publishable. needs: build-gate also means this
+  # waits for the build rather than racing it.
+  record:
+    name: Record the tested candidate
+    needs: [config, validate, candidate, build-gate, gates]
+    if: >-
+      needs.candidate.result == 'success' &&
+      needs.build-gate.result == 'success' &&
+      (needs.gates.result == 'success' || needs.gates.result == 'skipped')
+    runs-on: ubuntu-latest
+    env:
+      CANDIDATE_REPO: ${{ needs.config.outputs.candidate_repo }}
+    steps:
+      - name: Checkout kernel-config
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: python -m pip install --quiet --upgrade pyyaml
+
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: qcom-next-candidate
+          path: candidate
+
+      - name: Record the candidate as publishable
+        env:
+          GH_PUSH_TOKEN: ${{ secrets.SPAT }}
+          CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+          PR_NUMBER: ${{ needs.config.outputs.pr_number }}
+          CONFIG_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_PUSH_TOKEN:-}" ]; then
+            echo "::warning title=qcom-next record::no push token; the tested candidate was not recorded, so publication cannot find it."
+            exit 0
+          fi
+
+          # The manifest's first parent must be the candidate commit, so the
+          # commit has to be present locally. Fetching just that commit is far
+          # cheaper than cloning the kernel.
+          git init --quiet kernel
+          git -C kernel remote add candidate \
+              "https://x-access-token:${GH_PUSH_TOKEN}@github.com/${CANDIDATE_REPO}.git"
+          git -C kernel fetch --quiet --depth 1 --no-tags candidate \
+              "+${CANDIDATE_SHA}:refs/tested"
+
+          bash scripts/record_tested_candidate.sh \
+              --kernel-dir kernel \
+              --tested-set candidate/tested-set.txt \
+              --candidate-repo "${CANDIDATE_REPO}" \
+              --candidate-ref "${CANDIDATE_REF}" \
+              --candidate-sha "${CANDIDATE_SHA}" \
+              --config-repo "${GITHUB_REPOSITORY}" \
+              --config-sha "${CONFIG_SHA}" \
+              --pr "${PR_NUMBER}" \
+              --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+              --statuses "qcom-next-build" \
+              | tee record.log
+
+          {
+            echo "### Tested candidate recorded"
+            echo ""
+            echo "This candidate is now publishable for its config digest."
+            echo ""
+            echo '```'
+            sed 's/x-access-token:[^@]*@/x-access-token:***@/g' record.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ------------------------------------------------------------ final status
   final-status:
     name: Final status
     # build-gate has to be listed here. A job missing from needs is not waited
     # for and its result reads as empty, so the verdict was reported while the
-    # build gate was still running and ignored its outcome entirely.
-    needs: [validate, candidate, build-gate, gates]
+    # build gate was still running and ignored its outcome entirely. record is
+    # listed for the same reason: if the tested tree was not recorded,
+    # publication cannot find it after the merge, and that must not read green.
+    needs: [validate, candidate, build-gate, gates, record]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -608,6 +695,7 @@ jobs:
           CANDIDATE_RESULT: ${{ needs.candidate.result }}
           BUILD_GATE_RESULT: ${{ needs.build-gate.result }}
           GATES_RESULT: ${{ needs.gates.result }}
+          RECORD_RESULT: ${{ needs.record.result }}
         run: |
           set -euo pipefail
           classification="${CLASSIFICATION:-}"
@@ -615,12 +703,14 @@ jobs:
           candidate="${CANDIDATE_RESULT:-}"
           build_gate="${BUILD_GATE_RESULT:-}"
           gates="${GATES_RESULT:-}"
+          record="${RECORD_RESULT:-}"
 
           echo "classification : $classification"
           echo "validate       : $validate"
           echo "candidate      : $candidate"
           echo "build gate     : $build_gate"
           echo "gates          : $gates"
+          echo "record         : $record"
 
           if [ "$validate" != "success" ]; then
             echo "::error title=qcom-next PR CI::configuration validation failed"
@@ -644,7 +734,7 @@ jobs:
           fi
           # A gate that was not requested is skipped, which is not a failure.
           # Anything else, including cancelled, is.
-          for stage in "build gate:$build_gate" "gates:$gates"; do
+          for stage in "build gate:$build_gate" "gates:$gates" "record:$record"; do
             name="${stage%%:*}"
             result="${stage#*:}"
             case "$result" in

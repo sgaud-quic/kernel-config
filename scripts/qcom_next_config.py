@@ -319,7 +319,15 @@ def cmd_digest(cfg: dict, args) -> int:
     else:
         print(f"recorded\t{recorded or '<none>'}")
         print(f"computed\t{computed}")
-    if recorded and recorded != computed:
+    if recorded is None:
+        # A missing digest line is not "nothing to check": this command is the
+        # tamper check that check_tested_tree_matches.sh runs before publishing,
+        # and truncating the file or deleting the digest line used to pass it.
+        sys.stderr.write(
+            f"error: {args.tested_set} has no digest line, so it cannot be "
+            "verified; it was truncated or is not a tested-set file\n")
+        return 1
+    if recorded != computed:
         sys.stderr.write("error: tested-set digest does not match its contents\n")
         return 1
     return 0
