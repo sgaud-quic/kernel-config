@@ -1088,6 +1088,36 @@ def main(argv: Optional[List[str]] = None) -> int:
              'record" != "success"' in pr_raw_all and
              "publication cannot find it" in pr_raw_all)
 
+    # ------------------------------------------------- in-tree provenance
+    # automerge.yml commits qcom-next/topic_SHA1 and qcom-next/merge.log onto
+    # the integration branch, and the current config was bootstrapped by
+    # parsing that table out of a published qcom-next. A generated tree that
+    # dropped them would publish a qcom-next that is less traceable than the
+    # one it replaces, so assert the generator still does it.
+    print("\n[in-tree provenance]")
+    gen_path = os.path.join(HERE, "generate_qcom_next_tree.sh")
+    gen_raw = open(gen_path, encoding="utf-8").read()
+    t.ok("generation adds the in-tree log commit",
+         "topic_SHA1" in gen_raw and "merge.log" in gen_raw and
+         "Add qcom-next log files for" in gen_raw)
+    t.ok("the log commit subject matches automerge's",
+         "Add qcom-next log files for" in gen_raw and
+         "Adding merge log file and topic_SHA1 file" in gen_raw)
+    t.ok("the committed merge log is redacted",
+         "x-access-token:***@github.com" in gen_raw)
+    t.ok("generation refuses to commit a log that still holds a credential",
+         "refusing to commit it" in gen_raw)
+    t.ok("the table is built from verified pins, not the merge log",
+         "log-parser" in gen_raw and "merged" in gen_raw,
+         "log-parser.sh produces no rows for the ci-merge revision CI uses")
+    t.ok("the integration head is re-resolved after the log commit",
+         "INTEG_SHA=\"$LOG_COMMIT_SHA\"" in gen_raw,
+         "otherwise the tested set names the pre-log commit")
+    t.ok("ancestry is re-proved against the log commit",
+         "stopped being reachable after the log commit" in gen_raw)
+    t.ok("the log commit can be disabled",
+         "--no-log-commit" in gen_raw)
+
     # ------------------------------------------------------------ actionlint
     # Optional, because it is not a dependency of this repo. When present it
     # validates expressions the way GitHub does, which catches the whole class

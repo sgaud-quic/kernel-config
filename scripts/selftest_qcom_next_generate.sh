@@ -594,6 +594,123 @@ check "the conflict count is non-zero" $? "$WORK/gen-conflict.log"
 
 # ==========================================================================
 say ""
+say "[9] in-tree topic_SHA1 and merge.log"
+
+# automerge.yml has always committed qcom-next/topic_SHA1 and
+# qcom-next/merge.log onto the integration branch, and the current config was
+# bootstrapped by parsing that table out of a published qcom-next. The
+# generated tree has to carry the same provenance.
+KDIR10="$WORK/kernel-logs"
+OUT10="$WORK/out-logs"
+fresh_kernel "$KDIR10"
+run_generate "$CFG" "$KDIR10" "$OUT10" "$WORK/gen-logs.log"
+check "generation with the log commit succeeds" $? "$WORK/gen-logs.log"
+
+HEAD10="$(G "$KDIR10" rev-parse refs/heads/qcom-next 2>/dev/null || echo none)"
+
+G "$KDIR10" cat-file -e "refs/heads/qcom-next:qcom-next/topic_SHA1" 2>/dev/null
+check "qcom-next/topic_SHA1 is in the tree" $?
+
+G "$KDIR10" cat-file -e "refs/heads/qcom-next:qcom-next/merge.log" 2>/dev/null
+check "qcom-next/merge.log is in the tree" $?
+
+SUBJ10="$(G "$KDIR10" log -1 --format=%s refs/heads/qcom-next 2>/dev/null || echo '')"
+case "$SUBJ10" in
+    "Add qcom-next log files for"*) ok "the log commit keeps automerge's subject" ;;
+    *) no "the log commit keeps automerge's subject"; vsay "got: $SUBJ10" ;;
+esac
+
+G "$KDIR10" log -1 --format=%B refs/heads/qcom-next 2>/dev/null \
+    | grep -q '^Signed-off-by: '
+check "the log commit is signed off" $?
+
+# The tested set must name the commit that actually carries the logs, or
+# recording and publication would target the pre-log commit and publish a tree
+# without them.
+GEN_HEAD10="$(awk -F'\t' '$1=="generated_head" {print $2; exit}' "$OUT10/tested-set.txt")"
+[ -n "$GEN_HEAD10" ] && [ "$GEN_HEAD10" = "$HEAD10" ]
+check "the recorded generated_head is the log commit" $?
+vsay "generated_head ${GEN_HEAD10:0:12} / head ${HEAD10:0:12}"
+
+# Strongest check available: parse the generated table with the real consumer,
+# the bootstrap script that seeded the current config from a published tree.
+G "$KDIR10" show "refs/heads/qcom-next:qcom-next/topic_SHA1" > "$WORK/intree_topic_SHA1"
+SCRIPTS_DIR="$SELF_DIR" python3 - "$WORK/intree_topic_SHA1" "$CLK_V1" \
+        >"$WORK/parse-topicsha1.log" 2>&1 <<'PY'
+import os, sys
+
+sys.path.insert(0, os.environ["SCRIPTS_DIR"])
+from bootstrap_qcom_next_yaml import load_topic_sha1
+
+table = load_topic_sha1(sys.argv[1])
+want_clk = sys.argv[2]
+assert "tech/bsp/clk" in table, f"clk missing from table: {sorted(table)}"
+got = table["tech/bsp/clk"][0]
+assert got == want_clk, f"clk sha {got} != pinned {want_clk}"
+print("parsed", len(table), "row(s); clk =", got[:12])
+PY
+check "the real bootstrap parser reads the generated table" $? "$WORK/parse-topicsha1.log"
+vsay "$(cat "$WORK/parse-topicsha1.log" 2>/dev/null || true)"
+
+# Row count must equal the pins proved present. log-parser.sh would have
+# produced a header and no rows against this ci-merge revision, so a table that
+# silently lists nothing is the failure mode to guard.
+ROWS10=$(awk 'NR>2' "$WORK/intree_topic_SHA1" | grep -c . || true)
+PINS10=$(grep -oE 'pins verified present: [0-9]+' "$WORK/gen-logs.log" | awk '{print $4}' | tail -1)
+[ "${ROWS10:-0}" -gt 0 ] && [ "${ROWS10:-0}" = "${PINS10:-x}" ]
+check "every verified pin appears in topic_SHA1" $?
+vsay "rows=${ROWS10:-0} pins=${PINS10:-?}"
+
+# Published trees must not carry credentials or CRLF, matching automerge.yml.
+G "$KDIR10" show "refs/heads/qcom-next:qcom-next/merge.log" > "$WORK/intree_merge.log"
+! grep -q 'x-access-token:[^*]' "$WORK/intree_merge.log"
+check "the committed merge log carries no credential" $?
+
+! grep -q $'\r' "$WORK/intree_merge.log"
+check "the committed merge log has no CR characters" $?
+
+[ -s "$WORK/intree_merge.log" ]
+check "the committed merge log is not empty" $?
+
+# Pins must still be reachable from the published head, not merely from the
+# merge commit underneath it.
+MISSING10=0
+while IFS=$'\t' read -r nm sh cm st; do
+    [ "$st" = "merged" ] || continue
+    G "$KDIR10" merge-base --is-ancestor "$sh" "$HEAD10" 2>/dev/null || MISSING10=$((MISSING10 + 1))
+done < <(awk -F'\t' 'NR>1' "$OUT10/topic-shas.tsv")
+[ "$MISSING10" -eq 0 ]
+check "every pin is still an ancestor of the log commit" $?
+
+grep -q 'In-tree logs' "$OUT10/summary.md" 2>/dev/null
+check "the summary reports the in-tree logs" $? "$OUT10/summary.md"
+
+# The log commit changes the tree but not the inputs, so the digest -- which is
+# what publication looks the candidate up by -- must be unaffected.
+D10="$(python3 "$HELPER" digest "$OUT10/tested-set.txt" --quiet 2>/dev/null || echo x)"
+[ "$D10" = "$D1" ]
+check "the log commit does not change the tested-set digest" $?
+vsay "digest ${D10:0:16}"
+
+# And the opt-out must genuinely opt out.
+KDIR11="$WORK/kernel-nologs"
+OUT11="$WORK/out-nologs"
+fresh_kernel "$KDIR11"
+run_generate "$CFG" "$KDIR11" "$OUT11" "$WORK/gen-nologs.log" --no-log-commit
+check "generation with --no-log-commit succeeds" $? "$WORK/gen-nologs.log"
+
+if G "$KDIR11" cat-file -e "refs/heads/qcom-next:qcom-next/topic_SHA1" 2>/dev/null; then
+    no "--no-log-commit leaves the tree without the logs"
+else
+    ok "--no-log-commit leaves the tree without the logs"
+fi
+
+D11="$(python3 "$HELPER" digest "$OUT11/tested-set.txt" --quiet 2>/dev/null || echo y)"
+[ "$D11" = "$D1" ]
+check "the digest is identical with and without the log commit" $?
+
+# ==========================================================================
+say ""
 say "============================================================"
 printf 'ran %d checks: %d passed, %d failed\n' "$((PASS + FAIL))" "$PASS" "$FAIL"
 if [ "$FAIL" -eq 0 ]; then

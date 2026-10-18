@@ -54,6 +54,7 @@ ALLOW_DIRTY=0
 KEEP_REMOTES=0
 DRY_RUN=0
 NO_RERERE=0
+LOG_COMMIT=1
 VERBOSE=0
 
 die()  { printf 'error: %s\n' "$*" >&2; exit 2; }
@@ -92,6 +93,8 @@ Options:
   --allow-conflicts     report conflicts but still exit 0 (debugging only)
   --allow-dirty         proceed even if the kernel worktree is dirty
   --keep-remotes        do not remove remotes that are absent from the conf
+  --no-log-commit       do not add the in-tree qcom-next/topic_SHA1 and
+                        qcom-next/merge.log commit
   --dry-run             prepare refs and conf, but do not run ci-merge
   -v, --verbose         more detail
   -h, --help            this help
@@ -120,6 +123,7 @@ while [ $# -gt 0 ]; do
         --allow-conflicts) ALLOW_CONFLICTS=1; shift ;;
         --allow-dirty)   ALLOW_DIRTY=1; shift ;;
         --keep-remotes)  KEEP_REMOTES=1; shift ;;
+        --no-log-commit) LOG_COMMIT=0; shift ;;
         --dry-run)       DRY_RUN=1; shift ;;
         -v|--verbose)    VERBOSE=1; shift ;;
         -h|--help)       usage; exit 0 ;;
@@ -540,6 +544,110 @@ VERIFIED=$(awk -F'\t' '$4=="merged"' "$TOPIC_SHAS" | grep -c . || true)
 info "pins verified present: ${VERIFIED:-0} / $TOPIC_COUNT"
 
 # --------------------------------------------------------------------------
+# Carry the provenance of the merge inside the tree itself, the way
+# automerge.yml has always done: a final commit adding qcom-next/topic_SHA1 and
+# qcom-next/merge.log. Anyone looking at a published qcom-next can then see
+# which topic SHAs it is made of and how the merge went, without access to the
+# CI run that produced it. The bootstrap script reads exactly this table, which
+# is how the current config was seeded.
+if [ "$LOG_COMMIT" -eq 1 ]; then
+    step "Adding topic_SHA1 and merge.log to the tree"
+
+    LOG_DIR="$KERNEL_DIR/$INTEG_BRANCH"
+    mkdir -p "$LOG_DIR"
+
+    # Deliberately generated from the verified pins rather than by running
+    # automerge's log-parser.sh over the merge log. log-parser keys off
+    # "Merge successful : name : sha : commits" lines, which the ci-merge
+    # revision CI uses does not emit at all -- it would write a table with a
+    # header and no rows, exactly the "0 merged" artefact that already had to
+    # be corrected in the PR summary. These rows come from the ancestry proof,
+    # so the table is right regardless of ci-merge revision.
+    #
+    # Format is log-parser.sh's, byte for byte, because consumers parse it:
+    # bootstrap_qcom_next_yaml.py --topic-sha1 reads it, and automerge.yml
+    # feeds it to `gh pr create --body-file`.
+    TOPIC_SHA1_FILE="$LOG_DIR/topic_SHA1"
+    {
+        printf "%-20s %*s %*s\n" "Name" 20 "SHA" 40 "Commits"
+        printf "%s\n" "------------------------------------------------------------------------------------"
+        while IFS=$'\t' read -r name sha commits status; do
+            [ "$status" = "merged" ] || continue
+            printf "%-20s %*s %10s\n" "$name" 45 "$sha" "$commits"
+        done < <(awk -F'\t' 'NR>1' "$TOPIC_SHAS")
+    } > "$TOPIC_SHA1_FILE"
+
+    rows=$(awk 'NR>2' "$TOPIC_SHA1_FILE" | grep -c . || true)
+    info "topic_SHA1  : ${rows:-0} row(s)"
+    if [ "${rows:-0}" -ne "${VERIFIED:-0}" ]; then
+        fail "topic_SHA1 has $rows row(s) but $VERIFIED pin(s) were verified"
+    fi
+
+    # Strip CR and redact any embedded credential before the log goes into a
+    # tree that gets published, matching automerge.yml's handling. A conf built
+    # from file:// paths carries no token, but --kernel-dir can be any repo and
+    # a leaked token in a published tree is not recoverable.
+    TREE_MERGE_LOG="$LOG_DIR/merge.log"
+    sed -e 's/\r$//' \
+        -e 's#https://x-access-token:[^/@[:space:]]\{1,\}@github\.com/#https://x-access-token:***@github.com/#g' \
+        -e 's#https://[^/@[:space:]]\{1,\}@github\.com/#https://***@github.com/#g' \
+        "$MERGE_LOG" > "$TREE_MERGE_LOG"
+
+    if grep -q 'x-access-token:[^*]' "$TREE_MERGE_LOG" 2>/dev/null; then
+        fail "the merge log still contains a credential after redaction; refusing to commit it"
+    fi
+
+    # Commit on the integration branch with plumbing-free git, but keep the
+    # caller's identity out of it: default to a CI identity rather than
+    # inheriting whatever the runner has configured.
+    LOG_AUTHOR_NAME="${GIT_AUTHOR_NAME:-qcom-next CI}"
+    LOG_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-qcom-next-ci@qualcomm.com}"
+
+    git -C "$KERNEL_DIR" add "$INTEG_BRANCH/topic_SHA1" "$INTEG_BRANCH/merge.log" \
+        || fail "cannot stage the log files"
+
+    if ! GIT_AUTHOR_NAME="$LOG_AUTHOR_NAME" \
+         GIT_AUTHOR_EMAIL="$LOG_AUTHOR_EMAIL" \
+         GIT_COMMITTER_NAME="${GIT_COMMITTER_NAME:-$LOG_AUTHOR_NAME}" \
+         GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-$LOG_AUTHOR_EMAIL}" \
+         git -C "$KERNEL_DIR" commit --quiet \
+            -m "Add qcom-next log files for $(date '+%Y%m%d')" \
+            -m "Adding merge log file and topic_SHA1 file" \
+            -m "Signed-off-by: $LOG_AUTHOR_NAME <$LOG_AUTHOR_EMAIL>" \
+            >"$OUT_DIR/log-commit.log" 2>&1; then
+        sed 's/^/  /' "$OUT_DIR/log-commit.log" >&2 || true
+        fail "cannot commit the log files"
+    fi
+
+    LOG_COMMIT_SHA="$(git -C "$KERNEL_DIR" rev-parse "refs/heads/$INTEG_BRANCH")"
+    info "log commit  : ${LOG_COMMIT_SHA:0:12}"
+
+    # The integration head moved, so everything downstream -- the recorded
+    # tested set, the candidate push, publication -- must describe the commit
+    # that actually carries the logs.
+    INTEG_SHA="$LOG_COMMIT_SHA"
+
+    # Re-prove ancestry against the new head rather than trusting that a
+    # descendant commit preserves it. Cheap, and it means the published head is
+    # the verified head and not merely a child of it.
+    RECHECK_ERRORS=0
+    git -C "$KERNEL_DIR" merge-base --is-ancestor "$BASE_SHA" "$INTEG_SHA" 2>/dev/null \
+        || { printf 'base.sha is not an ancestor of the log commit\n' >&2
+             RECHECK_ERRORS=$((RECHECK_ERRORS + 1)); }
+    while IFS=$'\t' read -r name sha commits status; do
+        [ "$status" = "merged" ] || continue
+        git -C "$KERNEL_DIR" merge-base --is-ancestor "$sha" "$INTEG_SHA" 2>/dev/null \
+            || { printf 'pin for %-28s is not an ancestor of the log commit\n' "$name" >&2
+                 RECHECK_ERRORS=$((RECHECK_ERRORS + 1)); }
+    done < <(awk -F'\t' 'NR>1' "$TOPIC_SHAS")
+    [ "$RECHECK_ERRORS" -eq 0 ] \
+        || fail "$RECHECK_ERRORS pin(s) stopped being reachable after the log commit"
+    dbg "every pin is still an ancestor of the log commit"
+else
+    info "skipping the in-tree log commit (--no-log-commit)"
+fi
+
+# --------------------------------------------------------------------------
 step "Recording the tested set"
 
 hlp tested-set --generated-head "$INTEG_SHA" --output "$TESTED_SET" \
@@ -577,6 +685,11 @@ info "digest: $DIGEST"
     echo "| Already up to date | $nothing_cell |"
     echo "| Conflicts | $conflict_cell |"
     echo "| Pins verified | ${VERIFIED:-0} / $TOPIC_COUNT |"
+    if [ "$LOG_COMMIT" -eq 1 ]; then
+        echo "| In-tree logs | \`$INTEG_BRANCH/topic_SHA1\`, \`$INTEG_BRANCH/merge.log\` |"
+    else
+        echo "| In-tree logs | not added (\`--no-log-commit\`) |"
+    fi
     echo "| Tested-set digest | \`$DIGEST\` |"
     echo ""
     if [ "$CI_MERGE_HAS_SUMMARY" -eq 0 ]; then
