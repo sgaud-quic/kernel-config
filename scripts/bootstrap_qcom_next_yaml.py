@@ -273,7 +273,8 @@ def render_yaml(base: dict, topics: List[dict], promotion_state: str,
                 dropped: Optional[List[dict]] = None,
                 topic_sha1_source: Optional[str] = None,
                 from_recorded: Optional[List[str]] = None,
-                from_tip: Optional[List[str]] = None) -> str:
+                from_tip: Optional[List[str]] = None,
+                excluded_not_recorded: Optional[List[str]] = None) -> str:
     today = _dt.date.today().isoformat()
     out: List[str] = []
     a = out.append
@@ -308,6 +309,16 @@ def render_yaml(base: dict, topics: List[dict], promotion_state: str,
         a(f"# built, rather than whatever the branch tips happened to be.")
         if from_recorded:
             a(f"# {len(from_recorded)} topic(s) pinned from that table.")
+        if excluded_not_recorded:
+            a("#")
+            a(f"# {len(excluded_not_recorded)} topic(s) from {source_conf} are NOT listed")
+            a("# here. They are absent from the table, meaning that run reported")
+            a("# \"Already up to date\" for them and they contributed no commits, so")
+            a("# excluding them produces the same tree. Each should be re-added,")
+            a("# pinned and tagged, by its next promotion. Some may also have been")
+            a("# deleted upstream, in which case they should stay out:")
+            for name in excluded_not_recorded:
+                a(f"#   - {name}")
         if from_tip:
             a(f"#")
             a(f"# {len(from_tip)} topic(s) are absent from the table: that run merged")
@@ -400,6 +411,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--require-topic-sha1", action="store_true",
                     help="fail if a configured topic is absent from the "
                          "topic_SHA1 table, instead of falling back to its tip")
+    ap.add_argument("--only-topic-sha1", action="store_true",
+                    help="keep only the topics present in the topic_SHA1 table. "
+                         "Topics absent from it contributed nothing to that "
+                         "integration, so dropping them reproduces the same tree "
+                         "without pinning anything to an unverified tip")
     ap.add_argument("--promotion-state", default="open", choices=["open", "frozen"],
                     help="initial promotion state (default: %(default)s)")
     ap.add_argument("--rerere-repo", default=DEFAULT_RERERE_REPO,
@@ -447,6 +463,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"{args.baseline_sha!r}\n"
         )
         return 2
+    if args.only_topic_sha1 and not args.topic_sha1:
+        sys.stderr.write("error: --only-topic-sha1 requires --topic-sha1\n")
+        return 2
+    if args.require_topic_sha1 and not args.topic_sha1:
+        sys.stderr.write("error: --require-topic-sha1 requires --topic-sha1\n")
+        return 2
 
     if args.dry_run:
         for t in topics:
@@ -455,6 +477,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # Pinned topic SHAs from a recorded integration, if requested.
     recorded: Dict[str, Tuple[str, str]] = {}
+    excluded: List[str] = []
     if args.topic_sha1:
         try:
             recorded = load_topic_sha1(args.topic_sha1)
@@ -470,6 +493,20 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             for name in unknown:
                 sys.stderr.write(f"  + {name}\n")
+
+        if args.only_topic_sha1:
+            # A topic absent from the table merged nothing on that run, so
+            # excluding it yields the same tree while avoiding a pin to a tip
+            # that was never part of the recorded integration.
+            excluded = [t["name"] for t in topics if t["name"] not in recorded]
+            topics = [t for t in topics if t["name"] in recorded]
+            sys.stderr.write(
+                f"--only-topic-sha1: keeping {len(topics)} topic(s) from the table, "
+                f"dropping {len(excluded)} absent from it\n"
+            )
+            if not topics:
+                sys.stderr.write("error: no topics remain after filtering\n")
+                return 2
 
     repos = list(OrderedDict.fromkeys([baseline["repo"]] + [t["repo"] for t in topics]))
     sys.stderr.write(f"resolving {len(repos)} remote(s)\n")
@@ -602,6 +639,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         topic_sha1_source=args.topic_sha1,
         from_recorded=from_recorded,
         from_tip=from_tip,
+        excluded_not_recorded=(excluded if args.only_topic_sha1 and recorded else None),
     )
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(text)

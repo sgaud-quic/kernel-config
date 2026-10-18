@@ -633,6 +633,60 @@ class Runner:
                    mod.pick_tag(["tech/bsp/clk-7.3-rc6-20261001"], "tech/bsp/clk")
                    == "tech/bsp/clk-7.3-rc6-20261001")
 
+        # --only-topic-sha1 requires the table it filters against.
+        conf = self.write_raw(
+            "mini.conf",
+            "baseline      https://github.com/qualcomm-linux/kernel.git  qcom-next-staging\n"
+            "tech/bsp/clk  https://github.com/qualcomm-linux/kernel-topics.git  tech/bsp/clk\n"
+        )
+        p = subprocess.run(
+            [sys.executable, bootstrap, "--conf", conf,
+             "--output", os.path.join(self.tmp, "out.yaml"),
+             "--only-topic-sha1", "--dry-run"],
+            capture_output=True, text=True, timeout=120,
+        )
+        self.check("--only-topic-sha1 without --topic-sha1 is rejected",
+                   p.returncode == 2 and "requires --topic-sha1" in (p.stdout + p.stderr),
+                   p.stdout + p.stderr)
+
+        # The conf parser must ignore comments and locate the baseline by name
+        # rather than by position, matching ci-merge.
+        conf2 = self.write_raw(
+            "ordered.conf",
+            "# a comment\n"
+            "tech/a  https://example.invalid/t.git  tech/a\n"
+            "\n"
+            "baseline  https://example.invalid/k.git  main\n"
+            "tech/b  https://example.invalid/t.git  tech/b\n"
+        )
+        base, tl = mod.parse_conf(conf2, "baseline")
+        self.check("baseline located by name, not position",
+                   base["branch"] == "main", str(base))
+        self.check("topics keep conf order around the baseline row",
+                   [t["name"] for t in tl] == ["tech/a", "tech/b"], str(tl))
+
+        dup = self.write_raw(
+            "dup.conf",
+            "baseline  https://example.invalid/k.git  main\n"
+            "tech/a  https://example.invalid/t.git  tech/a\n"
+            "tech/a  https://example.invalid/t.git  tech/a\n"
+        )
+        try:
+            mod.parse_conf(dup, "baseline")
+            self.check("duplicate conf rows are rejected", False)
+        except mod.BootstrapError:
+            self.check("duplicate conf rows are rejected", True)
+
+        nobase = self.write_raw(
+            "nobase.conf",
+            "tech/a  https://example.invalid/t.git  tech/a\n"
+        )
+        try:
+            mod.parse_conf(nobase, "baseline")
+            self.check("conf without a baseline row is rejected", False)
+        except mod.BootstrapError:
+            self.check("conf without a baseline row is rejected", True)
+
     # --- entry ------------------------------------------------------------
     def run(self) -> int:
         print("qcom-next config self-tests")
