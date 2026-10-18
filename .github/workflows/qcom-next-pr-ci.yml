@@ -40,12 +40,18 @@ name: qcom-next config PR CI
 on:
   pull_request:
     branches: [main, ci-v2]
+    # This is the single entry point for pull requests, so the paths here must
+    # cover everything that affects the pinned config or the CI that consumes
+    # it, including the files the validate workflow used to watch itself.
     paths:
       - qcom-next.yaml
       - schemas/qcom-next.schema.json
       - scripts/**
       - topic_maintainers.json
+      - .github/actions/sync/action.yml
       - .github/workflows/qcom-next-pr-ci.yml
+      - .github/workflows/validate-qcom-next-config.yml
+      - .github/workflows/prune-qcom-next-candidates.yml
   workflow_dispatch:
     inputs:
       pr:

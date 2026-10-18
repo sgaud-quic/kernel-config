@@ -15,17 +15,14 @@
 name: Validate qcom-next config
 
 on:
-  pull_request:
-    branches: [main, ci-v2]
-    paths:
-      - qcom-next.yaml
-      - schemas/qcom-next.schema.json
-      - scripts/**
-      - topic_maintainers.json
-      - .github/actions/sync/action.yml
-      - .github/workflows/validate-qcom-next-config.yml
-      - .github/workflows/qcom-next-pr-ci.yml
-      - .github/workflows/prune-qcom-next-candidates.yml
+  # Deliberately no pull_request trigger. qcom-next-pr-ci.yml is the single
+  # entry point for pull requests and calls this workflow, and a called
+  # workflow still evaluates its own concurrency block. A pull_request trigger
+  # here therefore lands in the same group as the nested call, and with
+  # cancel-in-progress the two runs cancel each other: the standalone run was
+  # reported as a failed check on the PR while the identical nested run passed.
+  # It was also duplicated work publishing a second set of identically named
+  # checks. The paths that used to be listed here are covered by pr-ci.
   workflow_dispatch:
     inputs:
       base_ref:

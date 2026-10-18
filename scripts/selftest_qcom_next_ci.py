@@ -605,6 +605,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok(f"{label}: every inputs reference is in a step env",
              not offenders, str(offenders[:3]))
 
+    # ------------------------------------------ single pull_request entry point
+    print("\n[single pull_request entry point]")
+    # A called workflow still evaluates its own concurrency block, so if it also
+    # triggers on pull_request it collides with the nested call and, with
+    # cancel-in-progress, one cancels the other. The cancelled run then shows up
+    # as a failed check even though the work passed in the nested run.
+    called = set()
+    for jname, job in (pr_ci.get("jobs") or {}).items():
+        u = str(job.get("uses", ""))
+        if u.startswith("./"):
+            called.add(os.path.basename(u))
+
+    for name in sorted(called):
+        callee = load_wf(os.path.join(REPO, ".github", "workflows", name))
+        on = callee.get("on") or callee.get(True) or {}
+        if isinstance(on, str):
+            on = {on: None}
+        if isinstance(on, list):
+            on = {k: None for k in on}
+        t.ok(f"{name} (called by pr-ci) has no pull_request trigger",
+             "pull_request" not in on,
+             "a called workflow that also triggers on pull_request cancels "
+             "itself through the shared concurrency group")
+        t.ok(f"{name} is still callable", "workflow_call" in on, str(list(on)))
+
+    # pr-ci is the only pull_request entry point, so it has to watch every file
+    # that can change the pinned config or the CI that consumes it. Dropping a
+    # path here silently removes validation for that file.
+    on_prci = pr_ci.get("on") or pr_ci.get(True) or {}
+    prci_paths = set(((on_prci.get("pull_request") or {}).get("paths")) or [])
+    for required in ("qcom-next.yaml",
+                     "schemas/qcom-next.schema.json",
+                     "scripts/**",
+                     "topic_maintainers.json",
+                     ".github/actions/sync/action.yml",
+                     ".github/workflows/qcom-next-pr-ci.yml",
+                     ".github/workflows/validate-qcom-next-config.yml",
+                     ".github/workflows/prune-qcom-next-candidates.yml"):
+        t.ok(f"pr-ci watches {required}", required in prci_paths,
+             f"paths={sorted(prci_paths)}")
+
     # ------------------------------------------ reusable-call permission ceiling
     print("\n[reusable workflow permission ceiling]")
     # A called workflow cannot request more than its caller grants. Declaring
