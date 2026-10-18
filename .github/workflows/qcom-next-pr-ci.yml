@@ -74,9 +74,10 @@ on:
         default: false
         required: false
 
+# Least privilege at the workflow level: only the reporting job needs to write
+# to the PR, so it requests that itself.
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: qcom-next-pr-ci-${{ github.event.pull_request.number || github.ref }}
@@ -173,6 +174,7 @@ jobs:
         id: push
         env:
           GH_PUSH_TOKEN: ${{ secrets.SPAT }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr || 0 }}
         run: |
           set -euo pipefail
 
@@ -181,7 +183,7 @@ jobs:
             exit 1
           fi
 
-          pr_number='${{ github.event.pull_request.number || inputs.pr || 0 }}'
+          pr_number="${PR_NUMBER:-0}"
           cd "$GITHUB_WORKSPACE/kernel-topics"
           candidate_sha=$(git rev-parse "refs/heads/${INTEG_BRANCH}")
           short=${candidate_sha:0:12}
@@ -221,6 +223,10 @@ jobs:
 
       - name: Job summary
         if: ${{ always() }}
+        env:
+          CANDIDATE_REF: ${{ steps.push.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ steps.push.outputs.candidate_sha }}
+          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
         run: |
           {
             if [ -f candidate/summary.md ]; then
@@ -234,9 +240,9 @@ jobs:
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Candidate repo | \`${CANDIDATE_REPO}\` |"
-            echo "| Candidate ref | \`${{ steps.push.outputs.candidate_ref || 'not pushed' }}\` |"
-            echo "| Candidate sha | \`${{ steps.push.outputs.candidate_sha || 'n/a' }}\` |"
-            echo "| Classification | \`${{ needs.validate.outputs.classification }}\` |"
+            echo "| Candidate ref | \`${CANDIDATE_REF:-not pushed}\` |"
+            echo "| Candidate sha | \`${CANDIDATE_SHA:-n/a}\` |"
+            echo "| Classification | \`${CLASSIFICATION:-n/a}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------------------ gates
@@ -263,6 +269,7 @@ jobs:
         env:
           REQUESTED: ${{ inputs.gates || 'none' }}
           CLASSIFICATION: ${{ needs.validate.outputs.classification }}
+          REQUIRED_GATES: ${{ needs.validate.outputs.required_gates }}
         run: |
           set -euo pipefail
           case "$REQUESTED" in
@@ -271,7 +278,7 @@ jobs:
             *)    gates="$REQUESTED" ;;
           esac
           echo "gates=$gates" >> "$GITHUB_OUTPUT"
-          echo "classification=$CLASSIFICATION requires: ${{ needs.validate.outputs.required_gates }}"
+          echo "classification=$CLASSIFICATION requires: ${REQUIRED_GATES:-unknown}"
           echo "running gates: ${gates:-<none>}"
 
       - name: Dispatch gates and wait
@@ -282,16 +289,21 @@ jobs:
           # Run the gate workflow files from the branch under test rather than
           # the repository default.
           GATE_WORKFLOW_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+          GATE_LIST: ${{ steps.list.outputs.gates }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr || 0 }}
+          WORKFLOW_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           bash scripts/dispatch_gates.sh \
               --candidate-repo "${CANDIDATE_REPO}" \
-              --candidate-ref "${{ needs.candidate.outputs.candidate_ref }}" \
-              --candidate-sha "${{ needs.candidate.outputs.candidate_sha }}" \
-              --workflow-repo "${{ github.repository }}" \
+              --candidate-ref "${CANDIDATE_REF}" \
+              --candidate-sha "${CANDIDATE_SHA}" \
+              --workflow-repo "${WORKFLOW_REPO}" \
               --workflow-ref "${GATE_WORKFLOW_REF}" \
-              --gates "${{ steps.list.outputs.gates }}" \
-              --pr "${{ github.event.pull_request.number || inputs.pr || 0 }}" \
+              --gates "${GATE_LIST}" \
+              --pr "${PR_NUMBER}" \
               --output "$GITHUB_WORKSPACE/gate-summary.md" \
               --verbose
 
@@ -323,6 +335,11 @@ jobs:
     needs: [validate, candidate, gates]
     if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    # Scoped here rather than workflow-wide: this is the only job that writes
+    # to the PR. A fork PR gets read-only regardless, which the step handles.
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Download candidate artifacts
         uses: actions/download-artifact@v4
@@ -339,20 +356,36 @@ jobs:
         continue-on-error: true
 
       - name: Post or update the PR comment
+        # A fork PR always gets a read-only GITHUB_TOKEN, so commenting is
+        # impossible and returns 403. Skip rather than fail; the job summaries
+        # carry the same content. continue-on-error covers anything else.
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         uses: actions/github-script@v7
+        env:
+          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          GATES_RESULT: ${{ needs.gates.result }}
+          CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
+          CANDIDATE_REPO_NAME: ${{ env.CANDIDATE_REPO }}
+          DIGEST: ${{ needs.candidate.outputs.digest }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- qcom-next-pr-ci -->';
             const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
 
-            const classification = '${{ needs.validate.outputs.classification }}' || 'n/a';
-            const candidateResult = '${{ needs.candidate.result }}';
-            const gatesResult     = '${{ needs.gates.result }}';
-            const candidateRef    = '${{ needs.candidate.outputs.candidate_ref }}';
-            const candidateSha    = '${{ needs.candidate.outputs.candidate_sha }}';
-            const candidateRepo   = '${{ env.CANDIDATE_REPO }}';
-            const digest          = '${{ needs.candidate.outputs.digest }}';
+            // Everything arrives through env, so no workflow value is ever
+            // parsed as part of this script.
+            const classification  = process.env.CLASSIFICATION || 'n/a';
+            const candidateResult = process.env.CANDIDATE_RESULT || 'unknown';
+            const gatesResult     = process.env.GATES_RESULT || 'unknown';
+            const candidateRef    = process.env.CANDIDATE_REF || '';
+            const candidateSha    = process.env.CANDIDATE_SHA || '';
+            const candidateRepo   = process.env.CANDIDATE_REPO_NAME || '';
+            const digest          = process.env.DIGEST || '';
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
                            `/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
@@ -405,6 +438,29 @@ jobs:
                 { owner, repo, issue_number, body });
             }
 
+      - name: Summarise instead of commenting
+        if: >-
+          github.event.pull_request.head.repo.full_name != github.repository
+        env:
+          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          GATES_RESULT: ${{ needs.gates.result }}
+          CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
+        run: |
+          echo "::notice title=qcom-next PR CI::PR is from a fork, so GITHUB_TOKEN is read-only and no comment was posted."
+          {
+            echo "## qcom-next config PR CI"
+            echo ""
+            echo "PR is from a fork, so no comment could be posted."
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Classification | \`${CLASSIFICATION:-n/a}\` |"
+            echo "| Candidate generation | \`${CANDIDATE_RESULT:-n/a}\` |"
+            echo "| Gates | \`${GATES_RESULT:-n/a}\` |"
+            echo "| Candidate ref | \`${CANDIDATE_REF:-not pushed}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ------------------------------------------------------------ final status
   final-status:
     name: Final status
@@ -413,12 +469,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Decide the overall verdict
+        env:
+          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
+          VALIDATE_RESULT: ${{ needs.validate.result }}
+          CANDIDATE_RESULT: ${{ needs.candidate.result }}
+          GATES_RESULT: ${{ needs.gates.result }}
         run: |
           set -euo pipefail
-          classification='${{ needs.validate.outputs.classification }}'
-          validate='${{ needs.validate.result }}'
-          candidate='${{ needs.candidate.result }}'
-          gates='${{ needs.gates.result }}'
+          classification="${CLASSIFICATION:-}"
+          validate="${VALIDATE_RESULT:-}"
+          candidate="${CANDIDATE_RESULT:-}"
+          gates="${GATES_RESULT:-}"
 
           echo "classification : $classification"
           echo "validate       : $validate"

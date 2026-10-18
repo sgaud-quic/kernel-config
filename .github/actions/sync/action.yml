@@ -57,10 +57,16 @@ runs:
     - name: Classify sync mode
       id: mode
       shell: bash
+      # Inputs arrive through env rather than ${{ }} interpolation into the
+      # script, so a value containing shell metacharacters cannot be executed.
+      env:
+        IN_REPO: ${{ inputs.repo }}
+        IN_PR: ${{ inputs.pr_number }}
+        IN_REF: ${{ inputs.base_branch }}
       run: |
         set -euo pipefail
-        repo='${{ inputs.repo }}'
-        pr='${{ inputs.pr_number }}'
+        repo="$IN_REPO"
+        pr="$IN_PR"
 
         if [ "$repo" = "qualcomm-linux/kernel-topics" ]; then
           mode=topics
@@ -72,7 +78,7 @@ runs:
         fi
 
         echo "mode=$mode" >> "$GITHUB_OUTPUT"
-        echo "Sync mode: $mode (repo=$repo, pr=${pr:-<none>}, ref=${{ inputs.base_branch }})"
+        echo "Sync mode: $mode (repo=$repo, pr=${pr:-<none>}, ref=$IN_REF)"
 
     - name: Checkout kernel repository
       if: steps.mode.outputs.mode != 'topics'
@@ -101,9 +107,12 @@ runs:
     - name: Record the checked out commit
       if: steps.mode.outputs.mode == 'ref'
       shell: bash
+      env:
+        IN_REPO: ${{ inputs.repo }}
+        IN_REF: ${{ inputs.base_branch }}
       run: |
         set -euo pipefail
-        echo "Testing ${{ inputs.repo }} at ${{ inputs.base_branch }}"
+        echo "Testing $IN_REPO at $IN_REF"
         echo "commit: $(git rev-parse HEAD)"
         git --no-pager log -1 --format='%H %s'
 
@@ -229,13 +238,16 @@ runs:
     - name: Set workspace path
       id: set-workspace
       shell: bash
+      env:
+        SYNC_MODE: ${{ steps.mode.outputs.mode }}
+        WORKSPACE: ${{ github.workspace }}
       run: |
         # The topics flow clones the kernel into a subdirectory; every other
         # mode checks the kernel out at the workspace root. Keyed on the sync
         # mode rather than on a specific repository name, so a staging or fork
         # kernel repo resolves correctly.
-        if [[ "${{ steps.mode.outputs.mode }}" == "topics" ]]; then
-          echo "workspace=${{ github.workspace }}/kernel" >> "$GITHUB_OUTPUT"
+        if [ "$SYNC_MODE" = "topics" ]; then
+          echo "workspace=${WORKSPACE}/kernel" >> "$GITHUB_OUTPUT"
         else
-          echo "workspace=${{ github.workspace }}" >> "$GITHUB_OUTPUT"
+          echo "workspace=${WORKSPACE}" >> "$GITHUB_OUTPUT"
         fi

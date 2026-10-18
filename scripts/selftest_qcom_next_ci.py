@@ -430,6 +430,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok("mode classifier step is present", False)
     else:
         body = str(classify[0].get("run", ""))
+        step_env = classify[0].get("env", {}) or {}
+        # Inputs must reach the script through env, not ${{ }} interpolation.
+        t.ok("classifier reads inputs from env",
+             all(k in step_env for k in ("IN_REPO", "IN_PR")), str(step_env))
+        t.ok("classifier body has no template interpolation",
+             "${{" not in body, body)
+
         for repo_in, pr_in, want in [
             ("qualcomm-linux/kernel", "123", "pr"),          # production PR flow
             ("qualcomm-linux/kernel", "0", "ref"),           # candidate flow
@@ -440,19 +447,69 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("qualcomm-linux/kernel-topics", "55", "topics"),  # topics flow
             ("qualcomm-linux/kernel-topics", "", "topics"),
         ]:
-            # Substitute the action expressions, then run the same branch logic.
-            script = body.replace("${{ inputs.repo }}", repo_in)
-            script = script.replace("${{ inputs.pr_number }}", pr_in)
-            script = script.replace("${{ inputs.base_branch }}", "some-ref")
-            script = script.replace('>> "$GITHUB_OUTPUT"', ">> /dev/null")
+            script = body.replace('>> "$GITHUB_OUTPUT"', ">> /dev/null")
             script += '\nprintf "MODE=%s\\n" "$mode"\n'
-            p = run(["bash", "-c", script])
+            env = dict(os.environ)
+            env.update({"IN_REPO": repo_in, "IN_PR": pr_in, "IN_REF": "some-ref"})
+            p = subprocess.run(["bash", "-c", script], capture_output=True,
+                               text=True, timeout=120, env=env)
             got = ""
             m = re.search(r"MODE=(\w+)", p.stdout)
             if m:
                 got = m.group(1)
             t.ok(f"repo={repo_in or '<empty>'} pr={pr_in or '<empty>'} -> {want}",
                  got == want, f"got={got!r}\n{p.stdout}{p.stderr}")
+
+    # ------------------------------------------------- fork PR comment safety
+    print("\n[fork PR handling]")
+    # A fork PR always receives a read-only GITHUB_TOKEN regardless of the
+    # permissions block, so commenting returns 403. The run must not fail
+    # because of it; that cost a full CI cycle once already.
+    for label, raw_text in (("pr-ci", raw), ("validate", vraw)):
+        t.ok(f"{label}: comment step is gated on a same-repo PR",
+             "head.repo.full_name == github.repository" in raw_text, label)
+        t.ok(f"{label}: comment step is continue-on-error",
+             "continue-on-error: true" in raw_text, label)
+        t.ok(f"{label}: has a fork fallback path",
+             "head.repo.full_name != github.repository" in raw_text, label)
+        t.ok(f"{label}: explains the read-only token",
+             "read-only" in raw_text, label)
+
+    # Values must reach github-script through env, never by interpolation into
+    # the script body, or a workflow value could be parsed as code. Match real
+    # expressions rather than the literal braces, which also appear in prose.
+    expr = re.compile(r"\$\{\{\s*(steps|needs|inputs|github|env|secrets|vars|matrix)\.")
+    for label, wf_obj in (("pr-ci", pr_ci), ("validate", validate_wf)):
+        for job_name, job in (wf_obj.get("jobs") or {}).items():
+            for step in job.get("steps") or []:
+                if str(step.get("uses", "")).startswith("actions/github-script"):
+                    script = str((step.get("with") or {}).get("script", ""))
+                    bad = [l.strip() for l in script.splitlines() if expr.search(l)]
+                    t.ok(f"{label}.{job_name}: github-script body interpolates no workflow value",
+                         not bad, bad[:3])
+
+    # pull-requests: write must be scoped to the job that needs it.
+    for label, wf_obj in (("pr-ci", pr_ci), ("validate", validate_wf)):
+        wf_perms = wf_obj.get("permissions") or {}
+        t.ok(f"{label}: workflow-level permissions are read-only",
+             wf_perms.get("pull-requests") != "write", str(wf_perms))
+        writers = [n for n, j in (wf_obj.get("jobs") or {}).items()
+                   if (j.get("permissions") or {}).get("pull-requests") == "write"]
+        t.ok(f"{label}: exactly one job requests pull-requests write",
+             len(writers) == 1, str(writers))
+
+    # ------------------------------------------- pin refs vs checked-out branch
+    print("\n[generation: checked-out branch safety]")
+    gen = open(os.path.join(HERE, "generate_qcom_next_tree.sh"),
+               encoding="utf-8").read()
+    t.ok("generation detaches HEAD before repointing branch refs",
+         "detaching HEAD" in gen and "--detach" in gen)
+    t.ok("detach is not limited to the integration branch",
+         'CURRENT_BRANCH" != "HEAD"' in gen, gen[:0])
+    t.ok("update-ref failure surfaces git's own message",
+         "UPDATE_ERR" in gen)
+    t.ok("update-ref failure explains the checked-out-branch cause",
+         "2.45" in gen or "checked out while its ref" in gen)
 
     # --------------------------------------------------------- shell syntax
     print("\n[shell syntax]")

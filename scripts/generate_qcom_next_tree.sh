@@ -230,10 +230,20 @@ fi
 # ci-merge renames an existing integration branch, which accumulates clutter
 # over repeated CI runs, and it cannot check out a branch that is checked out.
 CURRENT_BRANCH="$(git -C "$KERNEL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
-if [ "$CURRENT_BRANCH" = "$INTEG_BRANCH" ]; then
-    info "detaching HEAD so the existing '$INTEG_BRANCH' branch can be replaced"
-    git -C "$KERNEL_DIR" checkout --quiet --detach HEAD || fail "cannot detach HEAD"
+
+# Detach HEAD before touching any refs. The pin refs below include
+# refs/heads/<base-branch> and refs/heads/<topic-branch>, any of which may be
+# the branch currently checked out. git 2.45 and later refuse to update the ref
+# of a checked-out branch, so this is required for the update-ref batch to
+# apply; older git allowed it, which quietly left the index and worktree
+# disagreeing with the ref. ci-merge checks out its own integration branch
+# shortly afterwards, so a detached HEAD here is harmless.
+if [ "$CURRENT_BRANCH" != "HEAD" ]; then
+    info "detaching HEAD (was on '$CURRENT_BRANCH') so branch refs can be repointed"
+    git -C "$KERNEL_DIR" checkout --quiet --detach HEAD \
+        || fail "cannot detach HEAD in $KERNEL_DIR"
 fi
+
 if git -C "$KERNEL_DIR" show-ref --verify --quiet "refs/heads/$INTEG_BRANCH"; then
     info "deleting stale integration branch '$INTEG_BRANCH' from a previous run"
     git -C "$KERNEL_DIR" branch -D "$INTEG_BRANCH" >/dev/null || fail "cannot delete $INTEG_BRANCH"
@@ -311,8 +321,12 @@ hlp pin-refs > "$PIN_REFS" || fail "cannot compute pin refs"
 UPDATE_IN="$OUT_DIR/.update-ref.in"
 awk -F'\t' 'NF==2 {printf "update %s %s\n", $1, $2}' "$PIN_REFS" > "$UPDATE_IN"
 PIN_REF_COUNT=$(grep -c . < "$UPDATE_IN" || true)
-git -C "$KERNEL_DIR" update-ref --stdin < "$UPDATE_IN" \
-    || fail "cannot create pin refs (see $UPDATE_IN)"
+if ! UPDATE_ERR="$(git -C "$KERNEL_DIR" update-ref --stdin < "$UPDATE_IN" 2>&1)"; then
+    printf '%s\n' "$UPDATE_ERR" >&2
+    printf 'HEAD is at: %s\n' \
+        "$(git -C "$KERNEL_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null)" >&2
+    fail "cannot create pin refs (batch in $UPDATE_IN). A common cause is a branch being checked out while its ref is repointed; git 2.45+ refuses that."
+fi
 info "created/updated $PIN_REF_COUNT pin refs"
 
 dbg "baseline pin: refs/heads/$BASE_BRANCH -> ${BASE_SHA:0:12}"

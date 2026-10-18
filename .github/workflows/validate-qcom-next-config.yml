@@ -65,9 +65,10 @@ on:
         description: Gate profile required for this change class
         value: ${{ jobs.validate.outputs.required_gates }}
 
+# Least privilege at the workflow level: only the validate job comments on the
+# PR, so it requests write access itself.
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   # One validation run per PR; superseded pushes are cancelled because only the
@@ -79,6 +80,11 @@ jobs:
   validate:
     name: Validate and classify
     runs-on: ubuntu-latest
+    # Scoped here rather than workflow-wide: this is the only job that writes
+    # to the PR. A fork PR gets read-only regardless, which the step handles.
+    permissions:
+      contents: read
+      pull-requests: write
     outputs:
       classification: ${{ steps.classify.outputs.classification }}
       publish_allowed: ${{ steps.classify.outputs.publish_allowed }}
@@ -189,6 +195,12 @@ jobs:
 
       - name: Build job summary
         if: ${{ always() }}
+        env:
+          BASE_REF_USED: ${{ steps.base.outputs.ref }}
+          VALIDATION: ${{ steps.validate.outcome }}
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
+          PUBLISH_ALLOWED: ${{ steps.classify.outputs.publish_allowed }}
+          REQUIRED_GATES: ${{ steps.classify.outputs.required_gates }}
         run: |
           {
             echo "## qcom-next config validation"
@@ -203,11 +215,11 @@ jobs:
             fi
             echo "| Field | Value |"
             echo "|---|---|"
-            echo "| Base ref | \`${{ steps.base.outputs.ref }}\` |"
-            echo "| Validation | \`${{ steps.validate.outcome }}\` |"
-            echo "| Classification | \`${{ steps.classify.outputs.classification || 'n/a' }}\` |"
-            echo "| Publication allowed | \`${{ steps.classify.outputs.publish_allowed || 'n/a' }}\` |"
-            echo "| Required gates | ${{ steps.classify.outputs.required_gates || 'n/a' }} |"
+            echo "| Base ref | \`${BASE_REF_USED:-n/a}\` |"
+            echo "| Validation | \`${VALIDATION:-n/a}\` |"
+            echo "| Classification | \`${CLASSIFICATION:-n/a}\` |"
+            echo "| Publication allowed | \`${PUBLISH_ALLOWED:-n/a}\` |"
+            echo "| Required gates | ${REQUIRED_GATES:-n/a} |"
             echo "| Workflow run | [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -223,17 +235,31 @@ jobs:
           retention-days: 14
 
       - name: Comment result on PR
-        if: ${{ always() && github.event_name == 'pull_request' }}
+        # A pull request from a fork always gets a read-only GITHUB_TOKEN,
+        # regardless of the permissions block above, so posting a comment is
+        # impossible there and returns 403. Skip it rather than fail a run whose
+        # actual checks passed; the job summary carries the same content.
+        # continue-on-error covers any further permission surprise.
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
         uses: actions/github-script@v7
+        env:
+          VALIDATION: ${{ steps.validate.outcome }}
+          CLASSIFICATION: ${{ steps.classify.outputs.classification }}
+          PUBLISH_ALLOWED: ${{ steps.classify.outputs.publish_allowed }}
         with:
           script: |
             const fs = require('fs');
             const marker = '<!-- qcom-next-config-validation -->';
             const read = (p) => { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } };
 
-            const validation = '${{ steps.validate.outcome }}';
-            const classification = '${{ steps.classify.outputs.classification }}' || 'n/a';
-            const publishAllowed = '${{ steps.classify.outputs.publish_allowed }}' || 'n/a';
+            // Read through env rather than interpolating ${{ }} into the
+            // script body, so no workflow value can be parsed as code.
+            const validation = process.env.VALIDATION || 'unknown';
+            const classification = process.env.CLASSIFICATION || 'n/a';
+            const publishAllowed = process.env.PUBLISH_ALLOWED || 'n/a';
             const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}` +
                            `/actions/runs/${process.env.GITHUB_RUN_ID}`;
 
@@ -269,6 +295,13 @@ jobs:
               await github.rest.issues.createComment(
                 { owner, repo, issue_number, body });
             }
+
+      - name: Note why no comment was posted
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::notice title=qcom-next config::PR is from a fork, so GITHUB_TOKEN is read-only and no comment was posted. The job summary above has the full result."
 
   generation-selftests:
     # Guards the SHA-pinned tree generator. It runs entirely against synthetic
