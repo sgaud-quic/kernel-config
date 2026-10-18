@@ -160,6 +160,15 @@ jobs:
     name: Validate and classify
     needs: config
     uses: ./.github/workflows/validate-qcom-next-config.yml
+    # A called workflow cannot request more than its caller grants, and the
+    # workflow-level block above deliberately grants only contents: read, which
+    # implicitly makes every other scope none. The called workflow's validate
+    # job asks for pull-requests: write so it can comment, so that ceiling has
+    # to be raised here. Doing it on this job rather than workflow-wide keeps
+    # the rest of the jobs least-privileged.
+    permissions:
+      contents: read
+      pull-requests: write
     secrets: inherit
     with:
       allow_untagged: ${{ needs.config.outputs.allow_untagged == 'true' }}

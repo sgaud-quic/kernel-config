@@ -550,8 +550,14 @@ def main(argv: Optional[List[str]] = None) -> int:
              wf_perms.get("pull-requests") != "write", str(wf_perms))
         writers = [n for n, j in (wf_obj.get("jobs") or {}).items()
                    if (j.get("permissions") or {}).get("pull-requests") == "write"]
-        t.ok(f"{label}: exactly one job requests pull-requests write",
-             len(writers) == 1, str(writers))
+        # Only the job that comments needs it, plus any reusable-workflow call
+        # that has to raise the ceiling for the callee. Everything else must
+        # stay read-only.
+        expected = {"report", "validate"} if label == "pr-ci" else {"validate"}
+        t.ok(f"{label}: only the commenting job and reusable calls request "
+             f"pull-requests write",
+             set(writers) <= expected and len(writers) >= 1,
+             f"writers={writers} expected subset of {sorted(expected)}")
 
     # The inputs context does not exist for a pull_request event. Workflow-level
     # env, job-level if, and job-level with are all evaluated during workflow
@@ -598,6 +604,62 @@ def main(argv: Optional[List[str]] = None) -> int:
                 offenders.append((i, line.strip()[:60]))
         t.ok(f"{label}: every inputs reference is in a step env",
              not offenders, str(offenders[:3]))
+
+    # ------------------------------------------ reusable-call permission ceiling
+    print("\n[reusable workflow permission ceiling]")
+    # A called workflow cannot request more than its caller grants. Declaring
+    # only contents: read at the caller implicitly sets every other scope to
+    # none, so a callee job asking for pull-requests: write fails the whole
+    # workflow at startup with "is only allowed 'pull-requests: none'". That is
+    # a startup_failure: no jobs, no annotations, and the workflow silently
+    # absent from the PR.
+    RANK = {"none": 0, "read": 1, "write": 2}
+
+    def granted(wf_obj, job):
+        # An explicit job-level block overrides the workflow-level one entirely.
+        block = job.get("permissions")
+        if block is None:
+            block = wf_obj.get("permissions")
+        if block is None:
+            return None            # inherits the repository default
+        if isinstance(block, str):  # read-all / write-all
+            lvl = "read" if block == "read-all" else "write"
+            return {"__all__": lvl}
+        return dict(block)
+
+    def level(perms, scope):
+        if perms is None:
+            return None
+        if "__all__" in perms:
+            return perms["__all__"]
+        # An explicit block makes every unlisted scope none.
+        return perms.get(scope, "none")
+
+    for label, wf_obj, path in (("pr-ci", pr_ci, PR_CI),):
+        for jname, job in (wf_obj.get("jobs") or {}).items():
+            uses = str(job.get("uses", ""))
+            if not uses.startswith("./"):
+                continue
+            callee_path = os.path.join(REPO, uses[2:])
+            t.ok(f"{label}.{jname}: callee exists", os.path.exists(callee_path), uses)
+            if not os.path.exists(callee_path):
+                continue
+            callee = load_wf(callee_path)
+            caller_perms = granted(wf_obj, job)
+
+            for cj_name, cj in (callee.get("jobs") or {}).items():
+                want = cj.get("permissions")
+                if want is None or isinstance(want, str):
+                    continue
+                for scope, lvl in want.items():
+                    have = level(caller_perms, scope)
+                    if have is None:
+                        continue   # caller inherits the repo default
+                    ok_ceiling = RANK.get(have, 0) >= RANK.get(str(lvl), 0)
+                    t.ok(f"{label}.{jname} grants {scope}:{lvl} needed by "
+                         f"{os.path.basename(callee_path)}:{cj_name}",
+                         ok_ceiling,
+                         f"caller grants {scope}:{have}, callee requests {lvl}")
 
     # ------------------------------------------- pin refs vs checked-out branch
     print("\n[generation: checked-out branch safety]")
