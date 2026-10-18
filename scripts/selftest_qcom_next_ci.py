@@ -162,9 +162,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.ok("triggers on pull_request", "pull_request" in trig)
     t.ok("supports workflow_dispatch", "workflow_dispatch" in trig)
 
-    env = pr_ci.get("env", {}) or {}
-    t.ok("CANDIDATE_REPO defaults to the staging repo",
-         CANDIDATE_REPO in str(env.get("CANDIDATE_REPO", "")), str(env))
+    # The candidate repo default now lives in the config job, because
+    # workflow-level env cannot read inputs on a pull_request event.
+    cfg_steps = "".join(str(s.get("run", ""))
+                        for s in (pr_ci.get("jobs", {}).get("config", {})
+                                  .get("steps") or []))
+    t.ok("candidate repo defaults to the staging repo",
+         CANDIDATE_REPO in cfg_steps, cfg_steps[:200])
+    t.ok("jobs consume the resolved candidate repo",
+         "needs.config.outputs.candidate_repo" in raw)
     t.ok("does not reference the production kernel repo as candidate",
          "qualcomm-linux/kernel.git" not in raw and
          "candidate_repo: qualcomm-linux/kernel" not in raw)
@@ -187,14 +193,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.ok("push fails loudly without a token",
          "no push token available" in raw)
 
-    t.ok("gates are skipped when requested",
-         "(inputs.gates || 'none') != 'none'" in raw, raw[:0])
-
     # Gates must default to off, including on pull_request runs where no input
-    # exists, until the composite-action pinning is resolved.
+    # exists, until the composite-action pinning is resolved. The default is
+    # resolved in the config job, so the gates job keys off that output rather
+    # than reading inputs at job level.
     gates_if = str(jobs.get("gates", {}).get("if", ""))
-    t.ok("gates default to none when no input is supplied",
-         "|| 'none'" in gates_if, gates_if)
+    t.ok("gates job keys off the resolved config output",
+         "needs.config.outputs.gates" in gates_if, gates_if)
+    t.ok("gates are skipped when the resolved value is none",
+         "!= 'none'" in gates_if, gates_if)
+    cfg_job = jobs.get("config", {})
+    t.ok("config job resolves the gate default",
+         "gates" in (cfg_job.get("outputs") or {}), str(cfg_job.get("outputs")))
+    cfg_run = "".join(str(s.get("run", "")) for s in cfg_job.get("steps") or [])
+    t.ok("config job defaults gates to none",
+         'gates="none"' in cfg_run, cfg_run[:200])
     dispatch_gates_default = (
         (triggers(pr_ci).get("workflow_dispatch", {}) or {})
         .get("inputs", {}).get("gates", {}).get("default")
@@ -208,16 +221,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     # ------------------------------------------- migration flag resolution
     print("\n[allow_untagged resolution]")
     # Both workflows fire on pull_request, where no inputs exist. Input
-    # defaults do not apply there, so the expression must coalesce or the
-    # untagged backlog fails every config PR.
+    # defaults do not apply there, so each must supply its own fallback.
     vraw = open(VALIDATE, encoding="utf-8").read()
     t.ok("validate coalesces a null allow_untagged",
          "inputs.allow_untagged == null" in vraw, vraw[:0])
     t.ok("validate's shell fallback is on, not off",
          'ALLOW_UNTAGGED:-true' in vraw,
          [l for l in vraw.splitlines() if "ALLOW_UNTAGGED:-" in l])
-    t.ok("pr-ci coalesces a null allow_untagged",
-         "inputs.allow_untagged == null" in raw)
+    t.ok("pr-ci defaults allow_untagged on in the config job",
+         'allow_untagged="true"' in cfg_run, cfg_run[:200])
+    t.ok("pr-ci passes the resolved value to the reusable workflow",
+         "needs.config.outputs.allow_untagged" in raw)
 
     vtrig = triggers(validate_wf)
     for trig_name in ("workflow_dispatch", "workflow_call"):
@@ -538,6 +552,52 @@ def main(argv: Optional[List[str]] = None) -> int:
                    if (j.get("permissions") or {}).get("pull-requests") == "write"]
         t.ok(f"{label}: exactly one job requests pull-requests write",
              len(writers) == 1, str(writers))
+
+    # The inputs context does not exist for a pull_request event. Workflow-level
+    # env, job-level if, and job-level with are all evaluated during workflow
+    # setup, so referencing inputs there makes the workflow fail to start with
+    # startup_failure and no usable error. Step-level env is evaluated at run
+    # time and is safe. This cost two CI cycles.
+    print("\n[inputs context safety]")
+    for label, wf_obj, path in (("pr-ci", pr_ci, PR_CI),
+                                ("validate", validate_wf, VALIDATE),
+                                ("prune", prune, PRUNE)):
+        trig = triggers(wf_obj)
+        if "pull_request" not in trig:
+            print(f"  skip  {label}: no pull_request trigger")
+            continue
+
+        wf_env = str(wf_obj.get("env") or {})
+        t.ok(f"{label}: workflow-level env does not read inputs",
+             "inputs." not in wf_env, wf_env)
+
+        for jname, job in (wf_obj.get("jobs") or {}).items():
+            t.ok(f"{label}.{jname}: job if does not read inputs",
+                 "inputs." not in str(job.get("if", "")), str(job.get("if")))
+            t.ok(f"{label}.{jname}: job with does not read inputs",
+                 "inputs." not in str(job.get("with") or {}), str(job.get("with")))
+            t.ok(f"{label}.{jname}: job env does not read inputs",
+                 "inputs." not in str(job.get("env") or {}), str(job.get("env")))
+
+    # Every remaining inputs reference must sit in a step-level env block.
+    for label, path in (("pr-ci", PR_CI), ("validate", VALIDATE),
+                        ("prune", PRUNE)):
+        wf_obj = {"pr-ci": pr_ci, "validate": validate_wf, "prune": prune}[label]
+        allowed = set()
+        for job in (wf_obj.get("jobs") or {}).values():
+            for step in job.get("steps") or []:
+                for v in (step.get("env") or {}).values():
+                    allowed.add(str(v))
+        body = open(path, encoding="utf-8").read()
+        offenders = []
+        for i, line in enumerate(body.splitlines(), 1):
+            if "inputs." not in line or line.lstrip().startswith("#"):
+                continue
+            if not any(line.strip().endswith(a.strip()) or a.strip() in line
+                       for a in allowed):
+                offenders.append((i, line.strip()[:60]))
+        t.ok(f"{label}: every inputs reference is in a step env",
+             not offenders, str(offenders[:3]))
 
     # ------------------------------------------- pin refs vs checked-out branch
     print("\n[generation: checked-out branch safety]")

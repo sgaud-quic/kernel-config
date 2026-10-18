@@ -84,24 +84,90 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  CANDIDATE_REPO: ${{ inputs.candidate_repo || 'qualcomm-linux-stg/kernel' }}
+  # Only static values here. The inputs context does not exist for a
+  # pull_request event, and workflow-level env is evaluated during workflow
+  # setup, so referencing inputs here makes the whole workflow fail to start
+  # with no usable error. Dispatch inputs are resolved in the config job below,
+  # where step-level expressions are evaluated at run time instead.
   TOPICS_REPO: qualcomm-linux/kernel-topics
   AUTOMERGE_REPO: qualcomm-linux/automerge
   INTEG_BRANCH: qcom-next
 
 jobs:
+  # ------------------------------------------------------------------ config
+  config:
+    # Resolves every dispatch input to a concrete value exactly once, so no
+    # other job or expression has to touch the inputs context. Defaults apply
+    # on a pull_request run, where no inputs are supplied.
+    name: Resolve settings
+    runs-on: ubuntu-latest
+    outputs:
+      candidate_repo: ${{ steps.r.outputs.candidate_repo }}
+      gates: ${{ steps.r.outputs.gates }}
+      allow_untagged: ${{ steps.r.outputs.allow_untagged }}
+      pr_number: ${{ steps.r.outputs.pr_number }}
+    steps:
+      - name: Resolve
+        id: r
+        env:
+          IN_CANDIDATE_REPO: ${{ inputs.candidate_repo }}
+          IN_GATES: ${{ inputs.gates }}
+          IN_ALLOW_UNTAGGED: ${{ inputs.allow_untagged }}
+          IN_PR: ${{ inputs.pr }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          candidate_repo="${IN_CANDIDATE_REPO:-}"
+          [ -n "$candidate_repo" ] || candidate_repo="qualcomm-linux-stg/kernel"
+
+          # Gates default to off, including for pull_request runs. The gates
+          # resolve their composite actions at @main, so they cannot yet test a
+          # candidate in a staging repo; opt in explicitly once that is fixed.
+          gates="${IN_GATES:-}"
+          [ -n "$gates" ] || gates="none"
+
+          # Untagged SHAs are tolerated for the duration of the migration: most
+          # topics have no conventional tag yet. This concerns tags only; an
+          # unpinned sha is still rejected by the schema and by V5.
+          allow_untagged="${IN_ALLOW_UNTAGGED:-}"
+          [ -n "$allow_untagged" ] || allow_untagged="true"
+
+          pr_number="${EVENT_PR:-}"
+          [ -n "$pr_number" ] || pr_number="${IN_PR:-0}"
+          [ -n "$pr_number" ] || pr_number="0"
+
+          {
+            echo "candidate_repo=$candidate_repo"
+            echo "gates=$gates"
+            echo "allow_untagged=$allow_untagged"
+            echo "pr_number=$pr_number"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## qcom-next PR CI settings"
+            echo ""
+            echo "| Setting | Value |"
+            echo "|---|---|"
+            echo "| Candidate repository | \`$candidate_repo\` |"
+            echo "| Gates | \`$gates\` |"
+            echo "| Allow untagged SHAs | \`$allow_untagged\` |"
+            echo "| PR number | \`$pr_number\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # ---------------------------------------------------------------- validate
   validate:
     name: Validate and classify
+    needs: config
     uses: ./.github/workflows/validate-qcom-next-config.yml
     secrets: inherit
     with:
-      allow_untagged: ${{ inputs.allow_untagged == null && true || inputs.allow_untagged }}
+      allow_untagged: ${{ needs.config.outputs.allow_untagged == 'true' }}
 
   # ------------------------------------------------------- generate + push
   candidate:
     name: Generate and push candidate
-    needs: validate
+    needs: [config, validate]
     # metadata-only and no-change leave the generated tree identical, so there
     # is nothing to build and nothing to test.
     if: >-
@@ -111,6 +177,8 @@ jobs:
     runs-on:
       group: GHA-Kernel-SelfHosted-RG
       labels: [self-hosted, kernel-prd-u2404-x64-large-od-ephem]
+    env:
+      CANDIDATE_REPO: ${{ needs.config.outputs.candidate_repo }}
     outputs:
       candidate_ref: ${{ steps.push.outputs.candidate_ref }}
       candidate_sha: ${{ steps.push.outputs.candidate_sha }}
@@ -174,7 +242,7 @@ jobs:
         id: push
         env:
           GH_PUSH_TOKEN: ${{ secrets.SPAT }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr || 0 }}
+          PR_NUMBER: ${{ needs.config.outputs.pr_number }}
         run: |
           set -euo pipefail
 
@@ -248,16 +316,17 @@ jobs:
   # ------------------------------------------------------------------ gates
   gates:
     name: Run gates on the candidate
-    needs: [validate, candidate]
-    # Gates default to "none", including for pull_request runs where no input
-    # exists. That is deliberate for the migration: the gates resolve their
-    # composite actions at @main (see the header), so they cannot yet test a
-    # candidate in a staging repo. Opt in explicitly with
-    # -f gates=pre-merge|all once that is resolved, then make it the default.
+    needs: [config, validate, candidate]
+    # Gates default to "none", resolved in the config job. That is deliberate
+    # for the migration: the gates resolve their composite actions at @main
+    # (see the header), so they cannot yet test a candidate in a staging repo.
+    # Opt in explicitly with -f gates=pre-merge|all once that is resolved.
     if: >-
       needs.candidate.result == 'success' &&
-      (inputs.gates || 'none') != 'none'
+      needs.config.outputs.gates != 'none'
     runs-on: ubuntu-latest
+    env:
+      CANDIDATE_REPO: ${{ needs.config.outputs.candidate_repo }}
     outputs:
       result: ${{ steps.gates.outcome }}
     steps:
@@ -267,7 +336,7 @@ jobs:
       - name: Resolve the gate list
         id: list
         env:
-          REQUESTED: ${{ inputs.gates || 'none' }}
+          REQUESTED: ${{ needs.config.outputs.gates }}
           CLASSIFICATION: ${{ needs.validate.outputs.classification }}
           REQUIRED_GATES: ${{ needs.validate.outputs.required_gates }}
         run: |
@@ -292,7 +361,7 @@ jobs:
           CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
           GATE_LIST: ${{ steps.list.outputs.gates }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr || 0 }}
+          PR_NUMBER: ${{ needs.config.outputs.pr_number }}
           WORKFLOW_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -332,9 +401,11 @@ jobs:
   # ----------------------------------------------------------------- report
   report:
     name: Report on the PR
-    needs: [validate, candidate, gates]
+    needs: [config, validate, candidate, gates]
     if: ${{ always() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
+    env:
+      CANDIDATE_REPO: ${{ needs.config.outputs.candidate_repo }}
     # Scoped here rather than workflow-wide: this is the only job that writes
     # to the PR. A fork PR gets read-only regardless, which the step handles.
     permissions:
@@ -378,8 +449,8 @@ jobs:
 
             // Values arrive through env rather than being interpolated into
             // this script body, so no workflow value can be parsed as code.
-            // CANDIDATE_REPO comes from the workflow-level env, which is
-            // already present in this step's process environment.
+            // CANDIDATE_REPO comes from this job's env, resolved by the
+            // config job.
             const classification  = process.env.CLASSIFICATION || 'n/a';
             const candidateResult = process.env.CANDIDATE_RESULT || 'unknown';
             const gatesResult     = process.env.GATES_RESULT || 'unknown';

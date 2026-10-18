@@ -75,19 +75,43 @@ jobs:
     name: Prune stale candidate refs
     runs-on: ubuntu-latest
     env:
-      CANDIDATE_REPO: ${{ inputs.candidate_repo || 'qualcomm-linux-stg/kernel' }}
-      PUBLISHED_REPO: ${{ inputs.published_repo || 'qualcomm-linux/kernel' }}
-      PUBLISHED_REF: ${{ inputs.published_ref || 'qcom-next' }}
-      MAX_AGE_DAYS: ${{ inputs.max_age_days || '7' }}
-      MIN_CLOSED_AGE_HOURS: ${{ inputs.min_closed_age_hours || '48' }}
-      # Scheduled runs default to actually deleting; manual runs default to a
-      # dry run so an operator cannot delete a batch of refs by accident.
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && (inputs.dry_run && 'true' || 'false') || 'false' }}
       GH_TOKEN: ${{ secrets.SPAT || github.token }}
     steps:
       - name: Prune
+        # Dispatch inputs are read here, in a step env, and defaulted in shell.
+        # The inputs context does not exist for a schedule event, and job-level
+        # env is evaluated during workflow setup, so reading inputs there would
+        # make the nightly run fail to start with no usable error.
+        env:
+          IN_CANDIDATE_REPO: ${{ inputs.candidate_repo }}
+          IN_PUBLISHED_REPO: ${{ inputs.published_repo }}
+          IN_PUBLISHED_REF: ${{ inputs.published_ref }}
+          IN_MAX_AGE_DAYS: ${{ inputs.max_age_days }}
+          IN_MIN_CLOSED_AGE_HOURS: ${{ inputs.min_closed_age_hours }}
+          IN_DRY_RUN: ${{ inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
+
+          CANDIDATE_REPO="${IN_CANDIDATE_REPO:-}"
+          [ -n "$CANDIDATE_REPO" ] || CANDIDATE_REPO="qualcomm-linux-stg/kernel"
+          PUBLISHED_REPO="${IN_PUBLISHED_REPO:-}"
+          [ -n "$PUBLISHED_REPO" ] || PUBLISHED_REPO="qualcomm-linux/kernel"
+          PUBLISHED_REF="${IN_PUBLISHED_REF:-}"
+          [ -n "$PUBLISHED_REF" ] || PUBLISHED_REF="qcom-next"
+          MAX_AGE_DAYS="${IN_MAX_AGE_DAYS:-}"
+          [ -n "$MAX_AGE_DAYS" ] || MAX_AGE_DAYS=7
+          MIN_CLOSED_AGE_HOURS="${IN_MIN_CLOSED_AGE_HOURS:-}"
+          [ -n "$MIN_CLOSED_AGE_HOURS" ] || MIN_CLOSED_AGE_HOURS=48
+
+          # A scheduled run deletes; a manual run defaults to a dry run so an
+          # operator cannot remove a batch of refs by accident.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            DRY_RUN="${IN_DRY_RUN:-true}"
+            [ -n "$DRY_RUN" ] || DRY_RUN=true
+          else
+            DRY_RUN=false
+          fi
 
           echo "candidate repo    : $CANDIDATE_REPO"
           echo "published         : $PUBLISHED_REPO @ $PUBLISHED_REF"
