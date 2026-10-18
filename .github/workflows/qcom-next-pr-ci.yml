@@ -271,8 +271,13 @@ jobs:
           candidate_sha=$(git rev-parse "refs/heads/${INTEG_BRANCH}")
           short=${candidate_sha:0:12}
 
-          # Keyed on the generated commit, so a re-run that produces identical
-          # content reuses the ref instead of accumulating new ones.
+          # One ref per tested commit. This does not dedupe re-runs: generation
+          # is content-reproducible, but ci-merge stamps its merge commits with
+          # the current time, so identical inputs still yield a new commit id
+          # and therefore a new ref. Keying on the content digest instead would
+          # collapse them, at the cost of force-moving the ref and potentially
+          # orphaning the exact commit the gates tested before publication can
+          # push it. Accumulation is handled by prune-qcom-next-candidates.yml.
           candidate_ref="qcom-next-candidate/pr-${pr_number}-${short}"
 
           git remote remove candidate 2>/dev/null || true
