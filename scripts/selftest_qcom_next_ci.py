@@ -1118,6 +1118,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     t.ok("the log commit can be disabled",
          "--no-log-commit" in gen_raw)
 
+    # The staging and production kernel repos carry a ruleset that rejects any
+    # author or committer email matching .*@qualcomm\.com. A candidate push
+    # carrying such a commit is refused with GH013, which is exactly how the
+    # first forced run failed after generating a perfectly good tree.
+    t.ok("the default log identity is not in the blocked domain",
+         "qcom-next-ci@qti.qualcomm.com" in gen_raw and
+         "qcom-next-ci@qualcomm.com" not in gen_raw,
+         "a .*@qualcomm.com identity is rejected with GH013 on push")
+    t.ok("generation refuses a blocked identity up front",
+         "GH013" in gen_raw)
+    t.ok("the workflow sets the log identity explicitly",
+         "GIT_AUTHOR_EMAIL: qcom-next-ci@qti.qualcomm.com" in pr_raw_all)
+
     # --------------------------------------------- forced candidate override
     # scripts/** is a watched path, but the classifier only reads
     # qcom-next.yaml, so a generator change is classified no-change and never

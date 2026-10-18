@@ -288,6 +288,16 @@ jobs:
       - name: Generate the candidate tree
         id: generate
         working-directory: kernel-config
+        env:
+          # Identity for the in-tree qcom-next/topic_SHA1 + merge.log commit.
+          # Set here rather than left to the script default so it is visible
+          # and changeable in one place. The domain matters: the kernel repos
+          # reject author/committer emails matching .*@qualcomm\.com with
+          # GH013, which is why automerge.yml uses a qti.qualcomm.com address.
+          GIT_AUTHOR_NAME: qcom-next CI
+          GIT_AUTHOR_EMAIL: qcom-next-ci@qti.qualcomm.com
+          GIT_COMMITTER_NAME: qcom-next CI
+          GIT_COMMITTER_EMAIL: qcom-next-ci@qti.qualcomm.com
         run: |
           set -euo pipefail
           bash scripts/generate_qcom_next_tree.sh \

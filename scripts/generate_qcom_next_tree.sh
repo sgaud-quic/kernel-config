@@ -600,8 +600,26 @@ if [ "$LOG_COMMIT" -eq 1 ]; then
     # Commit on the integration branch with plumbing-free git, but keep the
     # caller's identity out of it: default to a CI identity rather than
     # inheriting whatever the runner has configured.
+    #
+    # The domain is not cosmetic. The kernel repositories carry a ruleset that
+    # rejects any author or committer email matching .*@qualcomm\.com, and a
+    # push of this commit is refused outright with GH013 when it does:
+    #
+    #   - Author email must not match a given regex pattern: .*@qualcomm\.com
+    #
+    # qti.qualcomm.com does not match that pattern, because "@qualcomm.com" is
+    # not a substring of "@qti.qualcomm.com", which is why automerge.yml has
+    # always committed these same log files as sgaud@qti.qualcomm.com.
     LOG_AUTHOR_NAME="${GIT_AUTHOR_NAME:-qcom-next CI}"
-    LOG_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-qcom-next-ci@qualcomm.com}"
+    LOG_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-qcom-next-ci@qti.qualcomm.com}"
+
+    case "$LOG_AUTHOR_EMAIL" in
+        *@qualcomm.com)
+            fail "log commit identity '$LOG_AUTHOR_EMAIL' matches the ruleset
+  pattern .*@qualcomm\\.com, so the candidate push would be rejected with
+  GH013. Use a qti.qualcomm.com address."
+            ;;
+    esac
 
     git -C "$KERNEL_DIR" add "$INTEG_BRANCH/topic_SHA1" "$INTEG_BRANCH/merge.log" \
         || fail "cannot stage the log files"
