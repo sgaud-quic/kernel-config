@@ -110,6 +110,10 @@ jobs:
     outputs:
       candidate_repo: ${{ steps.r.outputs.candidate_repo }}
       gates: ${{ steps.r.outputs.gates }}
+      # Split once here so both the called build gate and the dispatcher job
+      # can gate on it; a job-level if cannot read another job's steps.
+      gate_build: ${{ steps.r.outputs.gate_build }}
+      gates_dispatched: ${{ steps.r.outputs.gates_dispatched }}
       allow_untagged: ${{ steps.r.outputs.allow_untagged }}
       pr_number: ${{ steps.r.outputs.pr_number }}
     steps:
@@ -133,6 +137,25 @@ jobs:
           gates="${IN_GATES:-}"
           [ -n "$gates" ] || gates="none"
 
+          # "all" is the only alias; everything else is taken literally.
+          case "$gates" in
+            all)  gate_list="build,pre-merge,yocto,ubuntu" ;;
+            none) gate_list="" ;;
+            *)    gate_list="$gates" ;;
+          esac
+
+          # The build gate is invoked as a called workflow, the rest through
+          # dispatch_gates.sh. Splitting here keeps them from running twice.
+          gate_build=false
+          dispatched=""
+          for g in $(printf '%s' "$gate_list" | tr ',' ' '); do
+            case "$g" in
+              "")      ;;
+              build)   gate_build=true ;;
+              *)       dispatched="${dispatched:+$dispatched,}$g" ;;
+            esac
+          done
+
           # Untagged SHAs are tolerated for the duration of the migration: most
           # topics have no conventional tag yet. This concerns tags only; an
           # unpinned sha is still rejected by the schema and by V5.
@@ -146,6 +169,8 @@ jobs:
           {
             echo "candidate_repo=$candidate_repo"
             echo "gates=$gates"
+            echo "gate_build=$gate_build"
+            echo "gates_dispatched=$dispatched"
             echo "allow_untagged=$allow_untagged"
             echo "pr_number=$pr_number"
           } >> "$GITHUB_OUTPUT"
@@ -334,16 +359,38 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # ------------------------------------------------------------------ gates
+  # The build gate runs as a called workflow rather than through the
+  # dispatcher. workflow_dispatch only fires for files already on the default
+  # branch, so dispatching it would be impossible until this work merges, while
+  # a local reusable-workflow reference resolves from the commit under test.
+  # Being called also means native waiting and cancellation instead of polling
+  # a commit status.
+  build-gate:
+    name: Build gate on the candidate
+    needs: [config, validate, candidate]
+    if: >-
+      needs.candidate.result == 'success' &&
+      needs.config.outputs.gate_build == 'true'
+    permissions:
+      contents: read
+    secrets: inherit
+    uses: ./.github/workflows/qcom-next-gates.yml
+    with:
+      pr: ${{ needs.config.outputs.pr_number }}
+      sha: ${{ needs.candidate.outputs.candidate_sha }}
+      ref: ${{ needs.candidate.outputs.candidate_ref }}
+      repo: ${{ needs.config.outputs.candidate_repo }}
+
   gates:
     name: Run gates on the candidate
     needs: [config, validate, candidate]
-    # Gates default to "none", resolved in the config job. That is deliberate
-    # for the migration: the gates resolve their composite actions at @main
-    # (see the header), so they cannot yet test a candidate in a staging repo.
-    # Opt in explicitly with -f gates=pre-merge|all once that is resolved.
+    # Only the PR-centric gates reach this job; the build gate is a called
+    # workflow. These resolve their composite actions at @main and are
+    # hardwired to qualcomm-linux/kernel, so dispatch_gates.sh refuses them for
+    # a staging candidate instead of reporting a green for skipped work.
     if: >-
       needs.candidate.result == 'success' &&
-      needs.config.outputs.gates != 'none'
+      needs.config.outputs.gates_dispatched != ''
     runs-on: ubuntu-latest
     env:
       CANDIDATE_REPO: ${{ needs.config.outputs.candidate_repo }}
@@ -353,30 +400,8 @@ jobs:
       - name: Checkout kernel-config
         uses: actions/checkout@v4
 
-      - name: Resolve the gate list
-        id: list
-        env:
-          REQUESTED: ${{ needs.config.outputs.gates }}
-          CLASSIFICATION: ${{ needs.validate.outputs.classification }}
-          REQUIRED_GATES: ${{ needs.validate.outputs.required_gates }}
-        run: |
-          set -euo pipefail
-          case "$REQUESTED" in
-            # "build" is the only gate that can test a candidate in a staging
-            # repo; the others resolve their actions at @main and are hardwired
-            # to qualcomm-linux/kernel. dispatch_gates.sh rejects them for any
-            # other candidate repo rather than reporting a false green.
-            all)  gates="build,pre-merge,yocto,ubuntu" ;;
-            none) gates="" ;;
-            *)    gates="$REQUESTED" ;;
-          esac
-          echo "gates=$gates" >> "$GITHUB_OUTPUT"
-          echo "classification=$CLASSIFICATION requires: ${REQUIRED_GATES:-unknown}"
-          echo "running gates: ${gates:-<none>}"
-
       - name: Dispatch gates and wait
         id: gates
-        if: ${{ steps.list.outputs.gates != '' }}
         env:
           GH_TOKEN: ${{ secrets.SPAT || github.token }}
           # Run the gate workflow files from the branch under test rather than
@@ -384,7 +409,7 @@ jobs:
           GATE_WORKFLOW_REF: ${{ github.event.pull_request.head.sha || github.sha }}
           CANDIDATE_REF: ${{ needs.candidate.outputs.candidate_ref }}
           CANDIDATE_SHA: ${{ needs.candidate.outputs.candidate_sha }}
-          GATE_LIST: ${{ steps.list.outputs.gates }}
+          GATE_LIST: ${{ needs.config.outputs.gates_dispatched }}
           PR_NUMBER: ${{ needs.config.outputs.pr_number }}
           WORKFLOW_REPO: ${{ github.repository }}
         run: |

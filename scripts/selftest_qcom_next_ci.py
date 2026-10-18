@@ -19,10 +19,12 @@ Exit 0 all passed, 1 a check failed, 2 prerequisite missing.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Dict, List, Optional
 
 try:
@@ -197,17 +199,26 @@ def main(argv: Optional[List[str]] = None) -> int:
          "no push token available" in raw)
 
     # Gates must default to off, including on pull_request runs where no input
-    # exists, until the composite-action pinning is resolved. The default is
-    # resolved in the config job, so the gates job keys off that output rather
-    # than reading inputs at job level.
+    # exists. The default is resolved in the config job, and the two gate paths
+    # key off the split it publishes rather than reading inputs at job level.
+    # The matrix below proves gates=none yields build=false and no dispatch.
     gates_if = str(jobs.get("gates", {}).get("if", ""))
-    t.ok("gates job keys off the resolved config output",
-         "needs.config.outputs.gates" in gates_if, gates_if)
-    t.ok("gates are skipped when the resolved value is none",
-         "!= 'none'" in gates_if, gates_if)
+    t.ok("dispatcher job keys off the resolved dispatch list",
+         "needs.config.outputs.gates_dispatched" in gates_if, gates_if)
+    t.ok("dispatcher job is skipped when nothing is left to dispatch",
+         "!= ''" in gates_if, gates_if)
+    build_if = str(jobs.get("build-gate", {}).get("if", ""))
+    t.ok("called build gate keys off the resolved build flag",
+         "needs.config.outputs.gate_build" in build_if, build_if)
+    t.ok("called build gate runs only when the build gate is requested",
+         "== 'true'" in build_if, build_if)
+    t.ok("build gate requires a successful candidate",
+         "needs.candidate.result == 'success'" in build_if, build_if)
     cfg_job = jobs.get("config", {})
-    t.ok("config job resolves the gate default",
-         "gates" in (cfg_job.get("outputs") or {}), str(cfg_job.get("outputs")))
+    for out_name in ("gates", "gate_build", "gates_dispatched"):
+        t.ok(f"config job publishes '{out_name}'",
+             out_name in (cfg_job.get("outputs") or {}),
+             str(cfg_job.get("outputs")))
     cfg_run = "".join(str(s.get("run", "")) for s in cfg_job.get("steps") or [])
     t.ok("config job defaults gates to none",
          'gates="none"' in cfg_run, cfg_run[:200])
@@ -635,6 +646,97 @@ def main(argv: Optional[List[str]] = None) -> int:
                 offenders.append((i, line.strip()[:60]))
         t.ok(f"{label}: every inputs reference is in a step env",
              not offenders, str(offenders[:3]))
+
+    # ------------------------------------------------------ gate split matrix
+    print("\n[gate split resolution]")
+    # The build gate is called, the rest are dispatched. If the split is wrong
+    # the same tree is either built twice or not at all, and because both
+    # consumers are job-level ifs the mistake shows up as a silently skipped
+    # job rather than an error.
+    cfg_steps = ((pr_ci.get("jobs") or {}).get("config") or {}).get("steps") or []
+    resolve = [s for s in cfg_steps if s.get("id") == "r"]
+    if not resolve:
+        t.ok("config resolve step is present", False)
+    else:
+        body = str(resolve[0].get("run", ""))
+        t.ok("resolve body has no template interpolation",
+             "${{" not in body, body)
+
+        for in_gates, want_build, want_disp in [
+            ("none", "false", ""),
+            ("", "false", ""),                       # pull_request default
+            ("build", "true", ""),
+            ("all", "true", "pre-merge,yocto,ubuntu"),
+            ("pre-merge", "false", "pre-merge"),
+            ("build,yocto", "true", "yocto"),
+            ("pre-merge,yocto,ubuntu", "false", "pre-merge,yocto,ubuntu"),
+        ]:
+            with tempfile.TemporaryDirectory() as td:
+                out_f = os.path.join(td, "out")
+                sum_f = os.path.join(td, "sum")
+                open(out_f, "w").close()
+                open(sum_f, "w").close()
+                script = body + '\necho "R|$gate_build|$dispatched"\n'
+                env = {
+                    "PATH": "/usr/bin:/bin",
+                    "IN_GATES": in_gates,
+                    "IN_CANDIDATE_REPO": "",
+                    "IN_ALLOW_UNTAGGED": "",
+                    "IN_PR": "0",
+                    "EVENT_PR": "291",
+                    "GITHUB_OUTPUT": out_f,
+                    "GITHUB_STEP_SUMMARY": sum_f,
+                }
+                p = subprocess.run(["bash", "-c", script], capture_output=True,
+                                   text=True, env=env)
+                line = [l for l in p.stdout.splitlines() if l.startswith("R|")]
+                if not line:
+                    t.ok(f"gates={in_gates!r} resolves", False,
+                         p.stderr.strip()[:200])
+                    continue
+                _, got_build, got_disp = line[0].split("|")
+                t.ok(f"gates={in_gates!r} -> build={want_build} "
+                     f"dispatched={want_disp or '<none>'}",
+                     got_build == want_build and got_disp == want_disp,
+                     f"got build={got_build} dispatched={got_disp!r}")
+
+    # --------------------------------------------- dangling step/needs refs
+    print("\n[expression reference integrity]")
+    # A reference to a step id that no longer exists evaluates to empty rather
+    # than failing, so a step guarded by it silently never runs and a job that
+    # consumes it silently sees "". Deleting a step and leaving a reader behind
+    # is therefore invisible at runtime.
+    for label, path in (("pr-ci", PR_CI), ("validate", VALIDATE),
+                        ("prune", PRUNE), ("gates-wf", GATES_WF)):
+        if not os.path.exists(path):
+            continue
+        wf_obj = load_wf(path)
+        raw_wf = open(path, encoding="utf-8").read()
+        jobs_o = wf_obj.get("jobs") or {}
+
+        for jname, job in jobs_o.items():
+            blob = json.dumps(job)
+            declared = {s.get("id") for s in (job.get("steps") or [])
+                        if s.get("id")}
+            referenced = set(re.findall(r"steps\.([A-Za-z0-9_-]+)\.", blob))
+            for r in sorted(referenced - declared):
+                t.ok(f"{label}.{jname}: steps.{r} is declared in this job",
+                     False,
+                     f"declared step ids: {sorted(declared)}")
+            if referenced <= declared:
+                t.ok(f"{label}.{jname}: step references all resolve",
+                     True, f"{len(referenced)} reference(s)")
+
+            # Same failure mode for needs.<job>: an unlisted dependency yields
+            # an empty value instead of an error.
+            needs = job.get("needs") or []
+            if isinstance(needs, str):
+                needs = [needs]
+            ref_needs = set(re.findall(r"needs\.([A-Za-z0-9_-]+)\.", blob))
+            unknown = {n for n in ref_needs if n not in set(needs)}
+            t.ok(f"{label}.{jname}: needs references are all declared",
+                 not unknown,
+                 f"referenced {sorted(unknown)} but needs={needs}")
 
     # ------------------------------------------------------ candidate gate wf
     print("\n[candidate gate workflow]")

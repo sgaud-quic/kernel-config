@@ -24,6 +24,37 @@ name: qcom-next candidate gates
 run-name: "qcom-next build gate: ${{ inputs.repo }}@${{ inputs.ref }}"
 
 on:
+  # Called by qcom-next-pr-ci.yml. A local reusable-workflow reference resolves
+  # from the calling commit, so this path works on a feature branch. That
+  # matters: workflow_dispatch only triggers for files already on the default
+  # branch, so until this lands on main the dispatch path below cannot be used
+  # at all. Being called also gives native waiting, log streaming and
+  # cancellation instead of polling a commit status.
+  workflow_call:
+    inputs:
+      pr:
+        description: kernel-config PR number that proposed this candidate
+        type: string
+        required: true
+      sha:
+        description: Candidate commit to build and to report the status on
+        type: string
+        required: true
+      ref:
+        description: Candidate branch ref in the candidate repo
+        type: string
+        required: true
+      repo:
+        description: Repository holding the candidate ref (OWNER/REPO)
+        type: string
+        required: true
+      variant:
+        description: Kernel variant to build (default or RT)
+        type: string
+        required: false
+        default: default
+  # Retained for standalone and batch use once this file reaches the default
+  # branch; scripts/dispatch_gates.sh drives that path.
   workflow_dispatch:
     inputs:
       pr:
