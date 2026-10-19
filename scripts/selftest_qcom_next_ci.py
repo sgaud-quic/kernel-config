@@ -1032,6 +1032,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         t.ok("publication keeps a durable record",
              "upload-artifact" in pub_raw and "publication.md" in pub_raw)
 
+        # A push to a development branch must not publish. Harmless while the
+        # target is staging, but the moment publish_repo points at production a
+        # push to ci-v2 touching qcom-next.yaml would publish production from a
+        # branch nobody merged.
+        push_branches = (pub_trig.get("push") or {}).get("branches") or []
+        t.ok("only the default branch publishes on push",
+             push_branches == ["main"], str(push_branches))
+        t.ok("a development branch cannot publish on push",
+             "ci-v2" not in push_branches, str(push_branches))
+
+        # workflow_dispatch can name any ref, so the trigger restriction alone
+        # is not sufficient.
+        t.ok("a non-staging target is refused from a side branch",
+             "Only '${default_branch}' may publish a non-staging target" in pub_raw or
+             "may publish a non-staging target" in pub_raw)
+        t.ok("the side-branch guard still allows staging from any ref",
+             "target is the staging repo; any ref may drive it" in pub_raw)
+
         p = run(["bash", os.path.join(HERE, "publish_qcom_next.sh"), "--help"])
         t.ok("publish script has usable help", p.returncode == 0,
              (p.stdout + p.stderr)[:200])

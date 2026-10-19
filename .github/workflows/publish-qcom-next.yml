@@ -27,7 +27,12 @@ name: Publish qcom-next
 
 on:
   push:
-    branches: [main, ci-v2]
+    # The default branch only. A push to a development branch must never
+    # publish: once publish_repo points at production, a push to ci-v2 that
+    # happened to touch qcom-next.yaml would publish production from a branch
+    # nobody merged. Development runs use workflow_dispatch with an explicit
+    # --ref instead, which is how every run so far was driven anyway.
+    branches: [main]
     paths:
       - qcom-next.yaml
   workflow_dispatch:
@@ -143,6 +148,33 @@ jobs:
             echo "| Required checks | \`$require_statuses\` |"
             echo "| Dry run | \`$dry_run\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Refuse to publish a non-staging target from a side branch
+        env:
+          PUBLISH_REPO: ${{ steps.r.outputs.publish_repo }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          # The config that decides what gets published is read from the ref
+          # this run was started on. Publishing anything other than the staging
+          # target therefore has to come from the default branch, or the
+          # published tree would be described by a config nobody merged.
+          # Restricting the push trigger is not enough on its own, because a
+          # workflow_dispatch can name any ref.
+          staging="qualcomm-linux-stg/kernel"
+          default_branch="${DEFAULT_BRANCH:-main}"
+
+          if [ "${PUBLISH_REPO}" = "$staging" ]; then
+            echo "target is the staging repo; any ref may drive it"
+            exit 0
+          fi
+
+          if [ "${GITHUB_REF_NAME}" != "$default_branch" ]; then
+            echo "::error title=qcom-next publication::refusing to publish to ${PUBLISH_REPO} from '${GITHUB_REF_NAME}'. Only '${default_branch}' may publish a non-staging target, because the config is read from the running ref. Merge the config first, then publish from ${default_branch}."
+            exit 1
+          fi
+          echo "publishing ${PUBLISH_REPO} from the default branch '${default_branch}'"
 
       - name: Publish
         id: publish
