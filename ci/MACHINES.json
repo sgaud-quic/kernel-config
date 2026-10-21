@@ -119,7 +119,7 @@
   "glymur-crd": {
     "machine": "glymur-crd",
     "firmware": "",
-    "lavaname": "glymur-crd",
+    "lavaname": "glymur-qli-crd",
     "target": "glymur-crd",
     "buildid": "",
     "firmwareid": "glymur-crd",
