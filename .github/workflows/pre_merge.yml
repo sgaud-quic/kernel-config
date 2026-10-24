@@ -97,7 +97,7 @@ jobs:
           PVK: ${{ secrets.PVK }}
 
   test:
-    if: inputs.repo == 'qualcomm-linux/kernel'
+    if: inputs.repo == 'qualcomm-linux/kernel' || inputs.repo == 'qualcomm-linux-stg/kernel'
     needs: [init-status, loading, build]
     uses: ./.github/workflows/test.yml
     secrets: inherit
