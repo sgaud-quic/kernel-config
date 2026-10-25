@@ -1,4 +1,5 @@
 name: Tag
+run-name: Tag ${{ inputs.branch_name }}
 
 on:
   workflow_dispatch:
