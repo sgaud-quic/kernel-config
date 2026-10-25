@@ -17,12 +17,6 @@ on:
         type: string
         required: false
         default: ""
-      base_branch:
-        description: Base branch for the generated PR. Leave empty to use the workflow branch.
-        type: string
-        required: false
-        default: ""
-
 permissions:
   contents: write
   pull-requests: write
@@ -44,7 +38,6 @@ jobs:
           TOPIC_BRANCH: ${{ inputs.topic_branch }}
           TOPIC_SHA: ${{ inputs.sha }}
           TOPIC_TAG: ${{ inputs.tag }}
-          BASE_BRANCH: ${{ inputs.base_branch }}
         run: |
           set -euo pipefail
 
@@ -53,7 +46,7 @@ jobs:
             exit 1
           fi
 
-          base_branch="${BASE_BRANCH:-${GITHUB_REF_NAME}}"
+          base_branch="${GITHUB_REF_NAME}"
           short_sha="${TOPIC_SHA:0:12}"
           safe_topic="$(printf '%s' "$TOPIC_BRANCH" | tr '/[:space:]' '--' | tr -cd 'A-Za-z0-9._-')"
           pr_branch="tmp/qcom-next-promote-${safe_topic}-${short_sha}"
